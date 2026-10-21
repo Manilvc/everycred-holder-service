@@ -1,0 +1,115 @@
+# Deployment of the holder service next to the existing EveryCRED
+# backend on the same host.
+#
+# Public URL: https://<api-host>/holder/...
+# nginx on the host strips /holder and proxies to 127.0.0.1:8040
+# (see deploy/nginx/holder-subpath.conf). MySQL is the existing server,
+# reached through DATABASE_URL in .env; no database container is started.
+#
+#   docker compose build
+#   docker compose up -d          # runs migrations first, then the API
+#                                 # and the background worker
+#   docker compose logs -f api
+
+name: everycred-holder
+
+x-service-defaults: &service-defaults
+  # Built locally by default. The CD pipeline sets HOLDER_IMAGE to the
+  # ECR image it pushed and PULL_POLICY=always, so the server pulls the
+  # tested image instead of building its own.
+  image: ${HOLDER_IMAGE:-everycred-holder-service:latest}
+  env_file: [.env]
+  # Reach MySQL (or anything else) running on the host as
+  # host.docker.internal, e.g. DATABASE_URL=mysql+aiomysql://...@host.docker.internal:3306/...
+  extra_hosts:
+    - "host.docker.internal:host-gateway"
+  # Hardening: the app writes nothing to disk and needs no privileges.
+  read_only: true
+  tmpfs:
+    - /tmp
+  cap_drop: [ALL]
+  security_opt:
+    - no-new-privileges:true
+  logging:
+    driver: json-file
+    options:
+      max-size: "20m"
+      max-file: "5"
+
+services:
+  # One-shot: applies Alembic migrations, then exits. The API waits for it.
+  migrate:
+    <<: *service-defaults
+    container_name: everycred-holder-migrate
+    command: ["migrate"]
+    restart: "no"
+    # Uses the image `api` builds, rather than building it too: two
+    # services building one tag in parallel race and fail with
+    # "image ... already exists". `never` stops compose from trying to
+    # pull it before the build; the CD pipeline sets PULL_POLICY=always.
+    pull_policy: ${PULL_POLICY:-never}
+
+  api:
+    <<: *service-defaults
+    container_name: everycred-holder-api
+    command: ["serve"]
+    # The only service that builds the image; `migrate` reuses it.
+    build:
+      context: .
+      target: runtime
+    pull_policy: ${PULL_POLICY:-build}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      # Must match the nginx location; uvicorn uses it to build URLs.
+      ROOT_PATH: /holder
+      PORT: "8040"
+      WEB_CONCURRENCY: "2"
+      # Only nginx on the host can reach the published port (below), and
+      # its requests arrive from the Docker bridge gateway, so trusting all
+      # forwarders is safe here and required for correct client IPs.
+      FORWARDED_ALLOW_IPS: "*"
+    ports:
+      # Loopback only: the service is reachable solely through nginx.
+      - "127.0.0.1:8040:8040"
+    restart: always
+    mem_limit: 768m
+    cpus: "1.0"
+    stop_grace_period: 30s
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import sys, urllib.request; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8040/health/live', timeout=3).status == 200 else 1)"
+      interval: 15s
+      timeout: 5s
+      start_period: 20s
+      retries: 5
+
+  # Notification delivery over socket and push.
+  # Exactly one instance: deliveries are not locked across processes.
+  worker:
+    <<: *service-defaults
+    container_name: everycred-holder-worker
+    command: ["worker"]
+    # Same image as `api`, which builds it.
+    pull_policy: ${PULL_POLICY:-never}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      api:
+        condition: service_started
+    restart: always
+    # The image's check calls the HTTP API, which the worker does not
+    # serve; this one checks that a worker round succeeded recently.
+    healthcheck:
+      test: ["CMD", "python", "-m", "app.worker", "--check"]
+      interval: 30s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
+    mem_limit: 256m
+    cpus: "0.5"
+    stop_grace_period: 30s

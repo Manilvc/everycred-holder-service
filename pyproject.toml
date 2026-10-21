@@ -1,0 +1,75 @@
+[project]
+name = "everycred-holder-service"
+version = "0.1.0"
+description = "Holder wallet API for EveryCRED: accounts, DIDs, notifications, and credentials fetched through the connector."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "aiomysql>=0.3.2",
+    "alembic>=1.20.0",
+    "boto3>=1.43.116",
+    "cryptography>=50.0.2",
+    "fastapi[standard]>=0.156.8",
+    "google-auth[requests]>=2.62.0",
+    "httpx>=0.28.1",
+    "pwdlib[argon2]>=0.3.1",
+    "pydantic-settings>=2.16.1",
+    "pyjwt>=2.15.1",
+    "qrcode[pil]>=8.2",
+    "redis>=8.1.0",
+    "sqlalchemy[asyncio]>=2.1.5",
+]
+
+[tool.fastapi]
+entrypoint = "app.main:app"
+
+[tool.ruff]
+line-length = 79
+target-version = "py312"
+
+[tool.ruff.lint]
+select = [
+    "E", "W",   # pycodestyle (PEP 8)
+    "F",        # pyflakes
+    "I",        # isort (import order)
+    "N",        # pep8-naming
+    "D",        # pydocstyle (PEP 257)
+    "UP",       # pyupgrade (modern syntax)
+    "B",        # bugbear
+    "SIM",      # simplify
+    "ASYNC",    # async pitfalls
+    "S",        # bandit security checks
+]
+ignore = ["D105", "D107"]  # magic methods and __init__ may skip docstrings
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.lint.per-file-ignores]
+# Tests may use asserts, skip docstrings, and hold fake credentials.
+"tests/**" = ["S101", "S105", "S106", "D"]
+
+[tool.ruff.lint.flake8-bugbear]
+# FastAPI declares dependencies as default argument values.
+extend-immutable-calls = [
+    "fastapi.Depends",
+    "fastapi.Query",
+    "fastapi.Body",
+    "fastapi.File",
+    "fastapi.Security",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+testpaths = ["tests"]
+
+[dependency-groups]
+dev = [
+    "aiosqlite>=0.22.1",
+    "asgi-lifespan>=2.1.0",
+    "moto[s3]>=5.2.4",
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.0",
+    "ruff>=0.17.1",
+]
