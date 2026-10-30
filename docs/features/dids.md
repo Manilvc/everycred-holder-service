@@ -72,12 +72,14 @@ Response `201 Created`:
 
 Errors:
 
-| Status | `error.code` | When |
-|--------|--------------|------|
-| 404 | `did_not_found` | No active holder owns the DID |
-| 404 | `key_not_found` | Revoking an unknown or revoked key |
-| 409 | `key_limit_reached` | `MAX_KEYS_PER_HOLDER` active keys already |
-| 422 | `validation_error` | Private members (`d`, ...), wrong curve, point not on curve |
+Errors use the DCS envelope `{"status", "data", "message"}`.
+
+| Status | `message` | When |
+|--------|-----------|------|
+| 404 | The DID was not found. | No active holder owns the DID |
+| 404 | Key `<key_id>` does not exist. | Revoking an unknown or revoked key |
+| 409 | Revoke an existing key before registering another. | `MAX_KEYS_PER_HOLDER` active keys already |
+| 422 | `<field> <reason>` | Private members (`d`, ...), wrong curve, point not on curve |
 
 ## Flow
 

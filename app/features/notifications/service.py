@@ -1,11 +1,13 @@
 """Holder inbox, connector event intake, and outbox delivery.
 
 The connector tells this service when a credential is issued or
-revoked, or a credential request changes. :class:`ConnectorEventService`
-verifies the webhook, writes an inbox entry, and queues one outbox row
-per live channel, all in one transaction, then answers at once. The
-background worker sends the outbox through
-:class:`NotificationDeliveryService`, retrying with backoff.
+revoked, a credential request changes, or an issuer invites a holder.
+:class:`ConnectorEventService` verifies the webhook, writes an inbox
+entry, and queues one outbox row per live channel, all in one
+transaction, then answers at once. The background worker sends the
+outbox through :class:`NotificationDeliveryService`, retrying with
+backoff. Invites are handed to the onboarding feature, which also keeps
+them for emails that have no account yet.
 """
 
 import logging
@@ -51,6 +53,7 @@ from app.features.notifications.schemas import (
     EventReceipt,
     InboxNotificationResponse,
 )
+from app.features.onboarding.service import OnboardingService
 from app.shared.schemas import Page
 
 logger = logging.getLogger(__name__)
@@ -129,6 +132,7 @@ class ConnectorEventService:
         self.settings = settings
         self.notifications = NotificationRepository(session)
         self.holders = HolderRepository(session)
+        self.onboarding = OnboardingService(session, settings)
 
     async def receive(
         self,
@@ -164,6 +168,10 @@ class ConnectorEventService:
             return EventReceipt(status="duplicate")
 
         holder = await self.holders.get_by_email(payload.data.holder_email)
+        if holder is not None and holder.is_deleted:
+            # A deleted account gets no notifications; it can still be
+            # recovered, and its credentials are listed live then.
+            holder = None
         self.notifications.add(
             ConnectorEvent(
                 delivery_id=delivery_id,
@@ -172,15 +180,31 @@ class ConnectorEventService:
                 holder_id=holder.id if holder else None,
             )
         )
-        if holder is not None:
-            self._queue_notification(payload, holder.id)
+        is_invite = payload.event == "holder.invited"
         try:
+            if holder is not None:
+                await self._queue_notification(payload, holder.id)
+                if is_invite:
+                    self.onboarding.queue_report(
+                        holder.id, payload.data.source_code
+                    )
+            elif is_invite:
+                self.onboarding.hold_invite(
+                    payload.data.holder_email,
+                    payload.data.source_code,
+                    payload.data.inviter_name,
+                )
             await self.session.commit()
         except IntegrityError:
             # The same delivery arrived twice at once; the other request
             # recorded it.
             await self.session.rollback()
             return EventReceipt(status="duplicate")
+        if holder is None and is_invite:
+            logger.info(
+                "Connector event %s: invite kept until sign-up", delivery_id
+            )
+            return EventReceipt(status="accepted")
         if holder is None:
             logger.info(
                 "Connector event %s has no matching holder", delivery_id
@@ -194,23 +218,13 @@ class ConnectorEventService:
         )
         return EventReceipt(status="accepted")
 
-    def _queue_notification(
+    async def _queue_notification(
         self, payload: ConnectorEventPayload, holder_id: uuid.UUID
     ) -> None:
         notification = build_inbox_notification(
             payload, holder_id, self.settings.notification_redirect_base_url
         )
-        self.notifications.add(notification)
-        now = utc_now()
-        for channel in DeliveryChannel:
-            self.notifications.add(
-                NotificationDelivery(
-                    notification_id=notification.id,
-                    holder_id=holder_id,
-                    channel=channel.value,
-                    next_attempt_at=now,
-                )
-            )
+        await self.notifications.add_notifications([notification])
 
 
 class NotificationDeliveryService:

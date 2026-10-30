@@ -3,26 +3,10 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.features.devices.models import PushToken
-from tests.conftest import RegisteredHolder
+from tests.conftest import RecordingMailer, RegisteredHolder, register_holder
 
 FCM_TOKEN = "fcm-token-" + "a" * 40
-
-
-async def load_token(
-    session_factory: async_sessionmaker[AsyncSession],
-) -> PushToken | None:
-    async with session_factory() as session:
-        return await session.scalar(
-            select(PushToken).where(PushToken.token == FCM_TOKEN)
-        )
-
-
-async def register_token(client: AsyncClient, holder: RegisteredHolder):
-    return await client.put(
-        "/v1/holders/me/push-token",
-        json={"token": FCM_TOKEN, "platform": "android"},
-        headers=holder.headers,
-    )
+URL = "/v1/push/holder/token"
 
 
 async def test_register_push_token(
@@ -30,63 +14,80 @@ async def test_register_push_token(
     holder: RegisteredHolder,
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    response = await register_token(client, holder)
-
-    push_token = await load_token(session_factory)
-    assert response.status_code == 200
-    assert push_token is not None and push_token.is_active
-    assert str(push_token.holder_id) == holder.holder_id
-
-
-async def test_registering_again_does_not_duplicate(
-    client: AsyncClient,
-    holder: RegisteredHolder,
-    session_factory: async_sessionmaker[AsyncSession],
-) -> None:
-    await register_token(client, holder)
-    await register_token(client, holder)
-
-    async with session_factory() as session:
-        rows = (await session.scalars(select(PushToken))).all()
-    assert len(rows) == 1
-
-
-async def test_unregister_push_token(
-    client: AsyncClient,
-    holder: RegisteredHolder,
-    session_factory: async_sessionmaker[AsyncSession],
-) -> None:
-    await register_token(client, holder)
-
-    response = await client.delete(
-        "/v1/holders/me/push-token", headers=holder.headers
-    )
-
-    push_token = await load_token(session_factory)
-    assert response.status_code == 204
-    assert push_token is not None and not push_token.is_active
-
-
-async def test_logout_stops_pushes_to_the_device(
-    client: AsyncClient,
-    holder: RegisteredHolder,
-    session_factory: async_sessionmaker[AsyncSession],
-) -> None:
-    await register_token(client, holder)
-
-    await client.post("/v1/auth/logout", headers=holder.headers)
-
-    push_token = await load_token(session_factory)
-    assert push_token is not None and not push_token.is_active
-
-
-async def test_malformed_token_is_rejected(
-    client: AsyncClient, holder: RegisteredHolder
-) -> None:
     response = await client.put(
-        "/v1/holders/me/push-token",
-        json={"token": "short", "platform": "android"},
+        URL,
+        json={
+            "token": FCM_TOKEN,
+            "platform": "android",
+            "device_label": "Pixel 8",
+            "app_version": "2.3.0",
+        },
         headers=holder.headers,
     )
 
-    assert response.status_code == 422
+    assert response.status_code == 200
+    assert response.json()["message"] == "Device registered for notifications."
+    assert response.json()["data"]["platform"] == "android"
+    async with session_factory() as session:
+        row = await session.scalar(select(PushToken))
+    assert row is not None
+    assert row.is_active
+    assert row.device_label == "Pixel 8"
+
+
+async def test_unregister_push_token(
+    client: AsyncClient, holder: RegisteredHolder
+) -> None:
+    await client.put(
+        URL,
+        json={"token": FCM_TOKEN, "platform": "ios"},
+        headers=holder.headers,
+    )
+
+    response = await client.request(
+        "DELETE", URL, json={"token": FCM_TOKEN}, headers=holder.headers
+    )
+
+    assert response.status_code == 200
+    assert response.json()["message"] == (
+        "Device unregistered from notifications."
+    )
+
+
+async def test_cannot_unregister_another_holders_token(
+    client: AsyncClient, holder: RegisteredHolder, mailer: RecordingMailer
+) -> None:
+    other = await register_holder(client, mailer, "other@example.com")
+    await client.put(
+        URL,
+        json={"token": FCM_TOKEN, "platform": "ios"},
+        headers=other.headers,
+    )
+
+    response = await client.request(
+        "DELETE", URL, json={"token": FCM_TOKEN}, headers=holder.headers
+    )
+
+    assert response.status_code == 404
+    assert response.json()["message"] == (
+        "This device isn't registered for notifications."
+    )
+
+
+async def test_account_deletion_deactivates_push_tokens(
+    client: AsyncClient,
+    holder: RegisteredHolder,
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    await client.put(
+        URL,
+        json={"token": FCM_TOKEN, "platform": "android"},
+        headers=holder.headers,
+    )
+
+    await client.delete("/v1/holder", headers=holder.headers)
+
+    async with session_factory() as session:
+        row = await session.scalar(select(PushToken))
+    assert row is not None
+    assert not row.is_active

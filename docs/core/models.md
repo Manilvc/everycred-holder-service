@@ -34,6 +34,17 @@ A `TypeDecorator` over `DateTime`:
 `datetime.now(UTC)`. Use it everywhere instead of `datetime.now()` or
 `datetime.utcnow()` (which returns a naive value).
 
+### `to_naive_iso(value) -> str | None`
+
+Formats a datetime as naive UTC ISO-8601 (`2026-10-22T10:00:00`), the
+format the DCS returned and the wallet app parses.
+
+### `generate_public_id() -> int`
+
+A random positive integer below 2^52, used for the integer ids the
+wallet app expects (`holders.numeric_id`, `credential_refs.numeric_id`).
+It is JavaScript-safe and reveals nothing about row counts.
+
 ## Usage
 
 ```python

@@ -1,13 +1,18 @@
-"""Response models for presentation storage."""
+"""Request model for presentation storage (DCS ``HolderStorage``)."""
 
-import uuid
+from datetime import datetime
+from typing import Any
 
 from pydantic import BaseModel
 
 
-class StoredPresentationResponse(BaseModel):
-    """Where a stored verifiable presentation can be fetched."""
+class HolderStorageRequest(BaseModel):
+    """Body of ``POST /v1/holder/storage``.
 
-    presentation_id: uuid.UUID
-    url: str
-    url_expires_in_seconds: int
+    ``data`` is the verifiable presentation the wallet built. The window
+    sets how long the returned URL works.
+    """
+
+    data: dict[str, Any]
+    valid_from: datetime | None = None
+    valid_until: datetime | None = None

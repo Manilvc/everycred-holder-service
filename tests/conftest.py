@@ -23,13 +23,16 @@ os.environ["STORAGE_BACKEND"] = "local"
 os.environ["EMAIL_BACKEND"] = "console"
 os.environ["OTP_RESEND_COOLDOWN_SECONDS"] = "60"
 os.environ["LOGIN_MAX_FAILED_ATTEMPTS"] = "3"
-os.environ["CREDENTIAL_EMAIL_HOURLY_LIMIT"] = "2"
+os.environ["OTP_TTL_MINUTES"] = "2"
+os.environ["OTP_MAX_ATTEMPTS"] = "3"
+os.environ["VERIFIER_BASE_URL"] = "https://verifier.example.com/"
 
 import httpx  # noqa: E402
 import pytest  # noqa: E402
 from asgi_lifespan import LifespanManager  # noqa: E402
 from fastapi import FastAPI  # noqa: E402
 from httpx import ASGITransport, AsyncClient  # noqa: E402
+from sqlalchemy import event  # noqa: E402
 from sqlalchemy.ext.asyncio import (  # noqa: E402
     AsyncSession,
     async_sessionmaker,
@@ -40,10 +43,12 @@ from sqlalchemy.pool import StaticPool  # noqa: E402
 # Model modules are imported so Base.metadata knows every table.
 import app.features.audit.models  # noqa: E402, F401
 import app.features.auth.models  # noqa: E402, F401
+import app.features.credentials.models  # noqa: E402, F401
 import app.features.devices.models  # noqa: E402, F401
 import app.features.dids.models  # noqa: E402, F401
 import app.features.holders.models  # noqa: E402, F401
 import app.features.notifications.models  # noqa: E402, F401
+import app.features.onboarding.models  # noqa: E402, F401
 from app.core.config import get_settings  # noqa: E402
 from app.core.connector import ConnectorClient, get_connector_client  # noqa: E402
 from app.core.database import Base, get_db_session  # noqa: E402
@@ -51,7 +56,7 @@ from app.core.email import OutgoingEmail, get_email_sender  # noqa: E402
 from app.core.storage import get_storage  # noqa: E402
 from app.main import create_app  # noqa: E402
 
-PASSWORD = "correct horse battery staple"
+PASSWORD = "CorrectHorse9!"
 ConnectorHandler = Callable[[httpx.Request], httpx.Response]
 
 
@@ -60,11 +65,13 @@ class MemoryStorage:
 
     def __init__(self) -> None:
         self.objects: dict[str, tuple[bytes, str]] = {}
+        self.url_ttls: dict[str, int | None] = {}
 
     async def put(self, key: str, content: bytes, content_type: str) -> None:
         self.objects[key] = (content, content_type)
 
-    async def url_for(self, key: str) -> str:
+    async def url_for(self, key: str, ttl_seconds: int | None = None) -> str:
+        self.url_ttls[key] = ttl_seconds
         return f"https://files.example.com/{key}?signature=test"
 
 
@@ -110,7 +117,8 @@ class RegisteredHolder:
 
     email: str
     password: str
-    holder_id: str
+    holder_id: int
+    uuid: str
     did: str
     access_token: str
 
@@ -119,11 +127,23 @@ class RegisteredHolder:
         return {"Authorization": f"Bearer {self.access_token}"}
 
 
+def _enforce_foreign_keys(
+    dbapi_connection: Any, connection_record: Any
+) -> None:
+    # SQLite ignores foreign keys unless asked. MySQL always enforces
+    # them, so tests must too, or rows inserted in the wrong order pass
+    # here and fail in production.
+    cursor = dbapi_connection.cursor()
+    cursor.execute("PRAGMA foreign_keys=ON")
+    cursor.close()
+
+
 @pytest.fixture
 async def session_factory() -> AsyncIterator[async_sessionmaker[AsyncSession]]:
     # StaticPool keeps one connection open, so every session sees the
     # same in-memory database for the duration of the test.
     engine = create_async_engine("sqlite+aiosqlite://", poolclass=StaticPool)
+    event.listen(engine.sync_engine, "connect", _enforce_foreign_keys)
     async with engine.begin() as connection:
         await connection.run_sync(Base.metadata.create_all)
     yield async_sessionmaker(engine, expire_on_commit=False)
@@ -183,34 +203,66 @@ async def client(app: FastAPI) -> AsyncIterator[AsyncClient]:
             yield http_client
 
 
+async def verify_email(
+    client: AsyncClient, mailer: RecordingMailer, email: str
+) -> None:
+    """Send and verify a registration OTP for ``email``."""
+    send_response = await client.post(
+        "/v1/wallet/holder/otp/send",
+        json={"email": email, "otp_type": "email"},
+    )
+    assert send_response.status_code == 200, send_response.text
+    verify_response = await client.post(
+        "/v1/wallet/holder/otp/verify",
+        json={
+            "email": email,
+            "otp_code": mailer.last_code(),
+            "otp_type": "email",
+        },
+    )
+    assert verify_response.status_code == 200, verify_response.text
+
+
+async def login(
+    client: AsyncClient, email: str, password: str = PASSWORD
+) -> str:
+    """Sign in and return the access token."""
+    response = await client.post(
+        "/v1/holder/login", json={"email": email, "password": password}
+    )
+    assert response.status_code == 200, response.text
+    return response.json()["data"]["token"]
+
+
 async def register_holder(
     client: AsyncClient,
     mailer: RecordingMailer,
     email: str = "holder@example.com",
 ) -> RegisteredHolder:
-    """Run OTP send, verify, and register; return the new holder."""
-    await client.post("/v1/auth/otp/send", json={"email": email})
-    verify_response = await client.post(
-        "/v1/auth/otp/verify",
-        json={"email": email, "code": mailer.last_code()},
-    )
-    registration_token = verify_response.json()["registration_token"]
+    """Run the wallet's OTP, register, and login calls for a new holder."""
+    await verify_email(client, mailer, email)
     register_response = await client.post(
-        "/v1/auth/register",
+        "/v1/holder/register",
         json={
-            "registration_token": registration_token,
+            "name": "Test Holder",
+            "email": email,
             "password": PASSWORD,
-            "full_name": "Test Holder",
+            "confirm_password": PASSWORD,
         },
     )
     assert register_response.status_code == 201, register_response.text
-    body = register_response.json()
+    token = await login(client, email)
+    profile = await client.get(
+        "/v1/holder", headers={"Authorization": f"Bearer {token}"}
+    )
+    data = profile.json()["data"]
     return RegisteredHolder(
         email=email,
         password=PASSWORD,
-        holder_id=body["holder_id"],
-        did=body["did"],
-        access_token=body["access_token"],
+        holder_id=data["id"],
+        uuid=data["uuid"],
+        did=data["did"],
+        access_token=token,
     )
 
 

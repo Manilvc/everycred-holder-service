@@ -175,7 +175,7 @@ class DidService:
             DidNotFoundError: No active holder owns ``did``.
         """
         holder = await self.holders.get_by_did(did)
-        if holder is None or not holder.is_active:
+        if holder is None or not holder.is_active or holder.is_deleted:
             raise DidNotFoundError("The DID was not found.")
         keys = await self.keys.list_active(holder.id)
         methods = [

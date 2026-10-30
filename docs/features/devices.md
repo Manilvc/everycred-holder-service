@@ -1,49 +1,50 @@
-# Devices
+# Devices (push tokens)
 
 > Package: `app/features/devices/`
-> Owner: EveryCRED backend team
-> Last updated: 2026-10-21
+> Last updated: 2026-10-22
 
 ## Overview
 
-FCM registration tokens of wallet installs, used by the worker to send
-push notifications.
+FCM registration tokens of wallet installs, at the DCS paths. A token
+is bound to the session that registered it, so ending the session
+(password change, reset, account deletion) stops pushes to that device.
 
 ## Endpoints
 
 | Method | Path | Summary | Auth |
 |--------|------|---------|------|
-| PUT | `/v1/holders/me/push-token` | Register this device | bearer |
-| DELETE | `/v1/holders/me/push-token` | Turn off pushes on this device | bearer |
+| PUT | `/v1/push/holder/token` | Register or refresh this device | bearer |
+| DELETE | `/v1/push/holder/token` | Turn off pushes for a token | bearer |
 
-`PUT` body:
+### `PUT /v1/push/holder/token`
+
+Request:
 
 ```json
-{"token": "<fcm registration token>", "platform": "android"}
+{ "token": "<fcm token>", "platform": "android", "device_label": "Pixel 8", "app_version": "2.3.0" }
 ```
 
-`platform` is `android`, `ios`, or `web`. Response:
-`{"platform": "android", "is_active": true}`.
+Response `200` "Device registered for notifications." with
+`{"uuid": "<token row id>", "platform": "android"}`.
 
-## Flow
+### `DELETE /v1/push/holder/token`
 
-The token is bound to the session of the request. Logging out, changing
-the password (other sessions), or resetting it deactivates the tokens of
-the ended sessions. A token already registered (same device, perhaps
-another holder) is moved to the current holder and session instead of
-duplicated. The worker deactivates tokens FCM reports as `UNREGISTERED`.
+Request `{"token": "<fcm token>"}`. `200` "Device unregistered from
+notifications.", or `404` "This device isn't registered for
+notifications." when the token is unknown or another holder's.
 
 ## Data model
 
 `push_tokens`: `holder_id`, `session_id`, `token` (unique), `platform`,
-`is_active`.
+`is_active`, `device_label`, `app_version`.
 
 ## Design decisions
 
-Binding to the session (not only the holder) means a shared or sold
-device stops receiving the previous holder's notifications as soon as
-they sign out.
+- **One row per token.** A token signed in by another holder moves to
+  them instead of both receiving pushes.
+- **Unknown and foreign tokens look the same** on delete, so tokens
+  cannot be probed.
 
 ## Testing
 
-`tests/features/devices/test_push_tokens.py`.
+- `tests/features/devices/test_push_tokens.py`

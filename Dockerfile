@@ -47,12 +47,14 @@ ENV PATH="/app/.venv/bin:$PATH" \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONFAULTHANDLER=1 \
-    PORT=8040
+    PORT=8041
 
 WORKDIR /app
 
 COPY --from=builder --chown=holder:holder /app/.venv /app/.venv
 COPY --chown=holder:holder app ./app
+# Migrations ship in the image so the container can bring the schema up
+# to date by itself (`serve` and `migrate` in the entrypoint).
 COPY --chown=holder:holder migrations ./migrations
 COPY --chown=holder:holder alembic.ini pyproject.toml README.md ./
 COPY --chown=holder:holder --chmod=0755 deploy/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
@@ -61,12 +63,15 @@ COPY --chown=holder:holder --chmod=0755 deploy/docker-entrypoint.sh /usr/local/b
 # lives in MySQL and the secret store.
 USER 10001:10001
 
-EXPOSE 8040
+EXPOSE 8041
 
-# The slim image has no curl; Python's standard library is enough.
-HEALTHCHECK --interval=15s --timeout=5s --start-period=20s --retries=5 \
-    CMD ["python", "-c", "import os, sys, urllib.request; sys.exit(0 if urllib.request.urlopen(f\"http://127.0.0.1:{os.environ.get('PORT', '8040')}/health/live\", timeout=3).status == 200 else 1)"]
+# The slim image has no curl; Python's standard library is enough. The
+# start period covers the migrations `serve` applies first, which may
+# wait up to DB_WAIT_SECONDS for the database.
+HEALTHCHECK --interval=15s --timeout=5s --start-period=60s --retries=5 \
+    CMD ["python", "-c", "import os, sys, urllib.request; sys.exit(0 if urllib.request.urlopen(f\"http://127.0.0.1:{os.environ.get('PORT', '8041')}/health/live\", timeout=3).status == 200 else 1)"]
 
-# `serve` runs the API, `migrate` applies Alembic migrations and exits.
+# `serve` applies migrations and runs the API, `migrate` only applies
+# them and exits, `worker` runs notification delivery.
 ENTRYPOINT ["docker-entrypoint.sh"]
 CMD ["serve"]

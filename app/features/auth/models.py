@@ -32,6 +32,13 @@ class EmailOtp(UUIDPrimaryKeyMixin, TimestampMixin, Base):
 
     Only the HMAC of the code is stored. A code is usable once, until
     ``expires_at``, and for at most ``OTP_MAX_ATTEMPTS`` wrong guesses.
+    ``consumed_at`` records the successful verification; ``used_at``
+    records the registration that relied on it, so one verification
+    creates at most one account.
+
+    A successful verification also issues a login token, stored as
+    ``login_token_hash``, that signs the new account in once after
+    registration; ``signed_in_at`` records that use.
     """
 
     __tablename__ = "email_otps"
@@ -41,6 +48,11 @@ class EmailOtp(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     attempts: Mapped[int] = mapped_column(Integer, default=0)
     expires_at: Mapped[datetime] = mapped_column(UTCDateTime)
     consumed_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+    used_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+    login_token_hash: Mapped[str | None] = mapped_column(
+        String(64), unique=True
+    )
+    signed_in_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
 
 
 class PasswordResetToken(UUIDPrimaryKeyMixin, TimestampMixin, Base):

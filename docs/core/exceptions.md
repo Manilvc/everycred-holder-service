@@ -1,85 +1,81 @@
-# `app/core/exceptions.py`
+# `app/core/exceptions.py` and `app/core/responses.py`
 
-> Last updated: 2026-10-21
+> Last updated: 2026-10-22
 
 ## Purpose
 
-Let services report failures without knowing about HTTP, and make
-every error response share one shape:
+Let services report failures without knowing about HTTP, and make every
+response use the DCS envelope the wallet app reads:
 
 ```json
-{
-  "error": {
-    "code": "not_found",
-    "message": "The notification was not found.",
-    "request_id": "6f37b4e671f344f99e4a0736491737ea",
-    "details": []
-  }
-}
+{ "status": "fail", "data": null, "message": "Invalid token" }
 ```
 
-`details` is present only for validation errors.
+The app decides success from the HTTP status code and shows `message`
+to the user, so messages must be safe and readable.
 
 ## Public API
 
-### Error classes
+### `app/core/responses.py`
 
-| Class                   | Status | `error_code`             | Use when                                   |
-|-------------------------|--------|--------------------------|--------------------------------------------|
-| `AppError`              | 400    | `bad_request`            | Base class; generic client error           |
-| `AuthenticationError`   | 401    | `authentication_failed`  | Missing or invalid credentials             |
-| `PermissionDeniedError` | 403    | `permission_denied`      | Authenticated but not allowed              |
-| `NotFoundError`         | 404    | `not_found`              | Resource absent (or not the holder's)      |
-| `ConflictError`         | 409    | `conflict`               | Duplicate or invalid state transition      |
-| `TooManyRequestsError`  | 429    | `too_many_requests`      | A per-holder or per-email limit was hit    |
-| `PayloadTooLargeError`  | 413    | `payload_too_large`      | An upload or request body is too big       |
-| `ExternalServiceError`  | 502    | `external_service_error` | The connector or SMTP relay failed         |
-| `UpstreamRejectedError` | 400    | connector's own code     | The connector rejected the request; its `error.code` (e.g. `invalid_params`) is passed through |
-
-Feature errors subclass one of these and override `error_code`:
+- `respond(status_code, message, data=None, headers=None) -> JSONResponse`
+  — success responses from routers. `status` is `"success"` for 200,
+  201 and 202, `"fail"` otherwise; falsy `data` becomes `null`, as in the
+  DCS `StandardResponse`.
+- `build_envelope(status_code, message, data=None) -> dict` — the same
+  envelope as a dict (used by the error handlers and the middleware).
+- `framework_error_body(status_code, message, **extra) -> dict` — the
+  DCS shape for framework errors, with the numeric status in `status`.
 
 ```python
-class NotificationNotFoundError(NotFoundError):
-    """Raised when the holder has no notification with the given id."""
+from fastapi import status
 
-    error_code = "notification_not_found"
+from app.core.responses import respond
+
+return respond(status.HTTP_200_OK, "Holder retrieved successfully!", detail)
 ```
 
-The message is sent to the client verbatim, so it must be safe to show.
+### Error classes
 
-### Response headers
+| Class | Status | Use when |
+|-------|--------|----------|
+| `AppError` | 400 | Base class; generic client error |
+| `AuthenticationError` | 401 | Invalid or expired token, ended session |
+| `NotAuthenticatedError` | 401 | No bearer token (envelope `status` is `401`) |
+| `PermissionDeniedError` | 403 | Authenticated but not allowed |
+| `NotFoundError` | 404 | Resource absent (or not the holder's) |
+| `ConflictError` | 409 | Duplicate or invalid state transition |
+| `PayloadTooLargeError` | 413 | An upload or request body is too big |
+| `UnprocessableError` | 422 | Well-formed request with unusable content |
+| `TooManyRequestsError` | 429 | A per-holder or per-email limit was hit |
+| `ExternalServiceError` | 502 | The connector or SMTP relay failed |
+| `UpstreamRejectedError` | 400 | The connector rejected the request |
 
-`AppError.headers` is sent with the response. `AuthenticationError`
-sets `WWW-Authenticate: Bearer`, which RFC 6750 requires on `401`
-responses.
-
-### `build_error_body(error_code, message, details=None) -> dict`
-
-Builds the envelope, filling `request_id` from context. Used by the
-handlers here and by `RequestContextMiddleware`.
-
-### `register_exception_handlers(app)`
-
-Registers the three handlers below. Called from `create_app()`.
+`AppError(message, data=None)`: `data` is returned in the envelope
+where the DCS contract puts details there, for example the remaining OTP
+attempts or the empty credential bucket. `error_code` is kept for logs
+only; the wallet does not see it.
 
 ## How it works
 
-| Handler                   | Catches                  | Response                                    |
-|---------------------------|--------------------------|---------------------------------------------|
-| `handle_app_error`        | `AppError` subclasses    | Class `status_code` and `error_code`; logged at `INFO` |
-| `handle_validation_error` | `RequestValidationError` | `422 validation_error` with `details`       |
-| `handle_http_error`       | Starlette `HTTPException` (unknown route, wrong method) | Same status; code derived from the status phrase, e.g. `method_not_allowed` |
+| Handler | Catches | Response |
+|---------|---------|----------|
+| `handle_app_error` | `AppError` subclasses | Class status, `{"status": "fail", "data", "message"}`; logged at `INFO` |
+| `handle_validation_error` | `RequestValidationError` | `422 {"status": 422, "data": null, "message": "<field> <msg>", "errors": [{"field", "message", "type"}]}` |
+| `handle_http_error` | Starlette `HTTPException` (unknown route, wrong method) | Same status, `{"status": <code>, "data": null, "message": <detail>}` |
 
-`_summarise_validation_errors` keeps only `loc`, `msg`, and `type` from
-each Pydantic error. Pydantic also includes the rejected `input`, which
-could be a password or an OTP, so it is dropped.
+`_summarise_validation_errors` keeps only the field, message and type.
+Pydantic also includes the rejected `input`, which could be a password
+or an OTP, so it is dropped.
 
-Unexpected exceptions are **not** handled here; see
-[middleware](middleware.md#why-crashes-are-handled-here).
+Unexpected exceptions are handled in
+[middleware](middleware.md#why-crashes-are-handled-here), which answers
+500 with the generic DCS message.
 
 ## Changing this module
 
-- Prefer subclassing over adding new status mappings.
+- Keep messages identical to the DCS where the wallet app shows them;
+  see [wallet_compatibility.md](../wallet_compatibility.md).
 - Do not raise `fastapi.HTTPException` from services; raise an
   `AppError` subclass instead.
 

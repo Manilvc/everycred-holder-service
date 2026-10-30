@@ -7,6 +7,8 @@ it handles those from DCS. Never rename a value.
 
 Connector events carry ids only, not issuer or subject names, so the
 texts are generic; the wallet loads details when the holder opens one.
+The exception is an issuer invite, which names the inviting
+organisation because there is nothing else to open.
 """
 
 import uuid
@@ -18,6 +20,8 @@ from app.features.notifications.schemas import ConnectorEventPayload
 
 REDIRECT_MODULE_CREDENTIALS = "credentials"
 REDIRECT_MODULE_REQUESTS = "requests"
+INVITE_NOTIFICATION_TYPE = "issuer_invitation"
+_INVITE_TITLE = "New Invitation"
 
 
 @dataclass(frozen=True, slots=True)
@@ -73,14 +77,38 @@ def _spec_for(payload: ConnectorEventPayload) -> _MessageSpec:
     )
 
 
+def build_invite_notification(
+    holder_id: uuid.UUID, source_code: str, inviter_name: str | None
+) -> InboxNotification:
+    """Return the inbox row for an issuer's invite to the holder."""
+    inviter = inviter_name or "An issuer"
+    return InboxNotification(
+        id=uuid.uuid4(),
+        holder_id=holder_id,
+        notification_type=INVITE_NOTIFICATION_TYPE,
+        title=_INVITE_TITLE,
+        message=f"{inviter} invited you to receive credentials.",
+        redirect_module=None,
+        redirect_path=None,
+        redirect_entity_type=None,
+        redirect_entity_id=None,
+        extra_metadata={"source_code": source_code},
+        is_read=False,
+    )
+
+
 def build_inbox_notification(
     payload: ConnectorEventPayload,
     holder_id: uuid.UUID,
     redirect_base_url: str,
 ) -> InboxNotification:
     """Return the inbox row a connector event produces for a holder."""
-    spec = _spec_for(payload)
     data = payload.data
+    if payload.event == "holder.invited":
+        return build_invite_notification(
+            holder_id, data.source_code, data.inviter_name
+        )
+    spec = _spec_for(payload)
     is_credential_event = payload.event.startswith("credential.")
     if is_credential_event:
         module, entity_type, path_prefix, metadata_key = (

@@ -38,3 +38,5 @@ class PushToken(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     token: Mapped[str] = mapped_column(String(512), unique=True)
     platform: Mapped[str] = mapped_column(String(16))
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    device_label: Mapped[str | None] = mapped_column(String(150))
+    app_version: Mapped[str | None] = mapped_column(String(50))

@@ -13,6 +13,7 @@ ConnectorEventType = Literal[
     "credential.revoked",
     "request.created",
     "request.updated",
+    "holder.invited",
 ]
 
 
@@ -24,6 +25,7 @@ class ConnectorEventData(BaseModel):
     credential_id: str | None = Field(default=None, max_length=255)
     request_id: str | None = Field(default=None, max_length=255)
     status: str | None = Field(default=None, max_length=64)
+    inviter_name: str | None = Field(default=None, max_length=200)
 
 
 class ConnectorEventPayload(BaseModel):

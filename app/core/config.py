@@ -10,7 +10,13 @@ from functools import lru_cache
 from typing import Annotated, Literal
 
 from fastapi import Depends
-from pydantic import EmailStr, Field, SecretStr, model_validator
+from pydantic import (
+    EmailStr,
+    Field,
+    SecretStr,
+    field_validator,
+    model_validator,
+)
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 LogLevel = Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
@@ -80,20 +86,22 @@ class Settings(BaseSettings):
     # as its session. Logging out or changing the password ends the
     # session, which invalidates the token immediately.
     session_lifetime_days: int = Field(default=30, ge=1, le=90)
+    # How long after OTP verification the email may still be registered.
     registration_token_minutes: int = Field(default=15, ge=1, le=60)
 
     # Keys the stored HMAC of OTP codes and password reset tokens, so a
     # leaked database alone cannot be used to confirm a code.
     token_hash_secret: SecretStr = Field(min_length=32)
 
-    otp_ttl_minutes: int = Field(default=10, ge=1, le=60)
-    otp_max_attempts: int = Field(default=5, ge=1, le=10)
+    # Defaults match the DCS, whose messages the wallet app shows.
+    otp_ttl_minutes: int = Field(default=2, ge=1, le=60)
+    otp_max_attempts: int = Field(default=3, ge=1, le=10)
     otp_resend_cooldown_seconds: int = Field(default=60, ge=0, le=3600)
 
     login_max_failed_attempts: int = Field(default=5, ge=1)
     login_lockout_minutes: int = Field(default=15, ge=1)
 
-    password_reset_ttl_minutes: int = Field(default=30, ge=5, le=1440)
+    password_reset_ttl_minutes: int = Field(default=15, ge=5, le=1440)
     # "{token}" is replaced with the reset token; usually a deep link
     # into the wallet app. A URL template, not a secret.
     password_reset_url: str = "everycredwallet://reset-password?token={token}"  # noqa: S105
@@ -104,6 +112,30 @@ class Settings(BaseSettings):
     connector_webhook_secret: SecretStr = Field(min_length=32)
     connector_timeout_seconds: float = Field(default=15.0, gt=0, le=120)
     webhook_tolerance_seconds: int = Field(default=300, ge=30, le=3600)
+
+    # A deleted account can be recovered by signing in within this many
+    # days; afterwards the email can be registered again.
+    account_deletion_grace_days: int = Field(default=30, ge=1, le=365)
+    # Lifetime of the token login returns for a recently deleted account.
+    recovery_token_ttl_seconds: int = Field(default=120, ge=30, le=900)
+
+    # Public verifier page; the share link is this URL followed by the
+    # credential's unique id.
+    verifier_base_url: str = "https://verifier.example.com/"
+    # Recipients one "email this credential" call may name; bounds how
+    # far a signed-in account can be used to send mail.
+    max_share_recipients: int = Field(default=10, ge=1, le=50)
+
+    # OAuth client ids (web, Android, iOS) whose Google ID tokens
+    # /holder/login/sso accepts. Empty disables Google sign-in.
+    google_client_ids: list[str] = Field(default_factory=list)
+
+    # "{token}" is replaced with the email verification token; usually a
+    # deep link into the wallet app. A URL template, not a secret.
+    email_verification_url: str = (
+        "everycredwallet://verify-email?token={token}"  # noqa: S105
+    )
+    email_verification_ttl_minutes: int = Field(default=60, ge=5, le=1440)
 
     did_prefix: str = Field(
         default="did:evrc:holder", pattern=r"^did:[a-z0-9]+(:[a-z0-9]+)*$"
@@ -123,6 +155,13 @@ class Settings(BaseSettings):
     )
     max_profile_image_bytes: int = Field(default=2 * 1024 * 1024, ge=1024)
     max_presentation_bytes: int = Field(default=1024 * 1024, ge=1024)
+    # Window used when the wallet sends no validity dates for a shared
+    # presentation, and the longest window accepted (S3 presigned URLs
+    # cannot live longer than 7 days).
+    presentation_default_window_seconds: int = Field(default=300, ge=60)
+    presentation_max_window_seconds: int = Field(
+        default=7 * 24 * 3600, ge=60, le=7 * 24 * 3600
+    )
 
     email_backend: EmailBackend = EmailBackend.CONSOLE
     email_from: EmailStr = "no-reply@example.com"
@@ -132,7 +171,6 @@ class Settings(BaseSettings):
     smtp_password: SecretStr | None = None
     smtp_use_starttls: bool = True
     smtp_timeout_seconds: float = Field(default=10.0, gt=0, le=60)
-    credential_email_hourly_limit: int = Field(default=10, ge=1, le=100)
 
     # Live notifications. Socket events are published to the Redis
     # channel the EveryCRED Socket service subscribes to; pushes go to
@@ -147,6 +185,29 @@ class Settings(BaseSettings):
 
     # Background worker: notification delivery.
     worker_interval_seconds: float = Field(default=5.0, gt=0, le=300)
+
+    @field_validator(
+        "aws_region",
+        "s3_bucket",
+        "smtp_host",
+        "smtp_username",
+        "smtp_password",
+        "socket_redis_url",
+        "fcm_project_id",
+        "fcm_service_account_json",
+        mode="before",
+    )
+    @classmethod
+    def treat_empty_as_unset(cls, value: object) -> object:
+        """Read ``KEY=`` in ``.env`` as "not configured".
+
+        ``.env.example`` lists optional keys with empty values, and code
+        checks these settings with ``is None``; an empty string would
+        otherwise count as configured, e.g. as a blank Redis URL.
+        """
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
 
     @model_validator(mode="after")
     def check_storage(self) -> "Settings":
@@ -188,8 +249,12 @@ class Settings(BaseSettings):
         """Reject malformed URLs and templates at startup."""
         if not self.connector_base_url.startswith(("https://", "http://")):
             raise ValueError("CONNECTOR_BASE_URL must be an http(s) URL")
+        if not self.verifier_base_url.startswith(("https://", "http://")):
+            raise ValueError("VERIFIER_BASE_URL must be an http(s) URL")
         if "{token}" not in self.password_reset_url:
             raise ValueError("PASSWORD_RESET_URL must contain {token}")
+        if "{token}" not in self.email_verification_url:
+            raise ValueError("EMAIL_VERIFICATION_URL must contain {token}")
         if bool(self.fcm_project_id) != bool(self.fcm_service_account_json):
             raise ValueError(
                 "FCM_PROJECT_ID and FCM_SERVICE_ACCOUNT_JSON must be set "

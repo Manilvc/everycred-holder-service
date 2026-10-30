@@ -16,7 +16,9 @@ routes never see HTTP details.
 """
 
 import logging
+from datetime import datetime
 from typing import Annotated, Any, Literal
+from urllib.parse import quote
 
 import httpx
 from fastapi import Depends, Request
@@ -60,6 +62,14 @@ class NormalizedCredential(BaseModel):
     qr_code_url: str | None = None
     hash: str | None = None
     credential_json: dict[str, Any] | None = None
+    credential_unique_id: str | None = None
+    subject_name: str | None = None
+    subject_logo_url: str | None = None
+    valid_from: str | None = None
+    valid_until: str | None = None
+    # The credential document exactly as the source returned it, so the
+    # wallet can check proofs against the original bytes.
+    credential_json_content: str | None = None
 
 
 class CredentialLookupItem(BaseModel):
@@ -70,6 +80,10 @@ class CredentialLookupItem(BaseModel):
     status: Literal["issued", "revoked"]
     credential: NormalizedCredential | None = None
     error: str | None = None
+    # When the connector first routed the credential and when its status
+    # last changed (ISO-8601).
+    first_seen_at: datetime | None = None
+    status_changed_at: datetime | None = None
 
 
 class CredentialLookupResponse(BaseModel):
@@ -162,10 +176,45 @@ class ConnectorClient:
         )
         return self._parse(OperationResponse, payload)
 
+    async def get_public_credential(
+        self, credential_id: str
+    ) -> NormalizedCredential:
+        """Return any credential by id, as a verifier would see it.
+
+        Raises:
+            NotFoundError: The connector does not know the credential.
+        """
+        payload = await self._request(
+            "GET", f"/v1/credentials/{quote(credential_id, safe='')}"
+        )
+        return self._parse(NormalizedCredential, payload)
+
+    async def record_verification(
+        self, credential_id: str, body: dict[str, Any]
+    ) -> OperationResult:
+        """Forward a verification record to the credential's source.
+
+        Raises:
+            NotFoundError: The connector does not know the credential.
+        """
+        payload = await self._request(
+            "POST",
+            f"/v1/credentials/{quote(credential_id, safe='')}"
+            "/verification-analytics",
+            body,
+        )
+        return self._parse(OperationResult, payload)
+
     async def _post(self, path: str, body: dict[str, Any]) -> Any:
+        return await self._request("POST", path, body)
+
+    async def _request(
+        self, method: str, path: str, body: dict[str, Any] | None = None
+    ) -> Any:
         url = f"{self.settings.connector_base_url.rstrip('/')}{path}"
         try:
-            response = await self.http_client.post(
+            response = await self.http_client.request(
+                method,
                 url,
                 json=body,
                 headers={

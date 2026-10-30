@@ -1,94 +1,110 @@
-import pytest
+import base64
+import json
+
 from httpx import AsyncClient
 
-from app.core.config import get_settings
 from tests.conftest import MemoryStorage, RegisteredHolder
 
-PNG_BYTES = b"\x89PNG\r\n\x1a\n" + b"\x00" * 64
+PNG_BYTES = b"\x89PNG\r\n\x1a\n" + b"\x00" * 32
+
+DCS_PROFILE_KEYS = {
+    "id",
+    "uuid",
+    "digi_client_id",
+    "name",
+    "email",
+    "profile_image",
+    "login_type",
+    "did",
+    "qrcode_path",
+    "holder_profile_path",
+    "is_kyc",
+    "is_terms_accepted",
+    "status",
+    "created_at",
+    "updated_at",
+    "deleted_at",
+    "contact",
+}
 
 
-async def test_profile_includes_did_file_urls(
-    client: AsyncClient, holder: RegisteredHolder, storage: MemoryStorage
-) -> None:
-    response = await client.get("/v1/holders/me", headers=holder.headers)
-
-    body = response.json()
-    assert body["full_name"] == "Test Holder"
-    assert body["did_qr_code_url"].startswith("https://files.example.com/")
-    assert body["profile_image_url"] is None
-    assert any(key.endswith("qr-code.png") for key in storage.objects)
-
-
-async def test_update_profile_changes_only_given_fields(
+async def test_get_holder_has_the_dcs_shape(
     client: AsyncClient, holder: RegisteredHolder
 ) -> None:
-    response = await client.patch(
-        "/v1/holders/me",
-        json={"mobile": "+919876543210"},
+    response = await client.get("/v1/holder", headers=holder.headers)
+
+    body = response.json()
+    data = body["data"]
+    assert response.status_code == 200
+    assert body["status"] == "success"
+    assert body["message"] == "Holder retrieved successfully!"
+    assert set(data) == DCS_PROFILE_KEYS
+    assert isinstance(data["id"], int)
+    assert 0 < data["id"] < 2**53
+    assert data["did"].startswith("did:evrc:holder:")
+    assert data["login_type"] == "register"
+    assert data["status"] == "registered"
+    assert data["profile_image"] is None
+    # Naive ISO-8601, as the DCS returns.
+    assert "+" not in data["created_at"]
+
+
+async def test_update_profile_returns_phone_number_and_image_url(
+    client: AsyncClient, holder: RegisteredHolder, storage: MemoryStorage
+) -> None:
+    response = await client.put(
+        "/v1/holder/update",
+        json={
+            "name": "Renamed Holder",
+            "contact": "+9876543210",
+            "profile_image": base64.b64encode(PNG_BYTES).decode(),
+        },
         headers=holder.headers,
     )
 
+    data = response.json()["data"]
     assert response.status_code == 200
-    assert response.json()["mobile"] == "+919876543210"
-    assert response.json()["full_name"] == "Test Holder"
+    assert response.json()["message"] == (
+        "Your handler profile is updated successfully."
+    )
+    assert data["name"] == "Renamed Holder"
+    assert data["phone_number"] == "+9876543210"
+    assert "contact" not in data
+    assert data["profile_image"].startswith("https://")
+    profile_document = json.loads(
+        storage.objects[
+            next(
+                key for key in storage.objects if key.endswith("profile.json")
+            )
+        ][0]
+    )
+    assert profile_document["name"] == "Renamed Holder"
+    assert profile_document["image"].startswith("data:image/png;base64,")
+    assert "+9876543210" not in json.dumps(profile_document)
 
 
-async def test_update_profile_rejects_unknown_fields(
+async def test_update_rejects_unsupported_image(
     client: AsyncClient, holder: RegisteredHolder
 ) -> None:
-    response = await client.patch(
-        "/v1/holders/me",
-        json={"email": "other@example.com"},
+    response = await client.put(
+        "/v1/holder/update",
+        json={"profile_image": base64.b64encode(b"GIF89a....").decode()},
         headers=holder.headers,
     )
 
     assert response.status_code == 422
+    assert response.json()["status"] == "fail"
+    assert response.json()["message"].startswith("Image format not supported")
 
 
-async def test_profile_requires_authentication(client: AsyncClient) -> None:
-    response = await client.get("/v1/holders/me")
-
-    assert response.status_code == 401
-
-
-async def test_upload_profile_image(
-    client: AsyncClient, holder: RegisteredHolder, storage: MemoryStorage
-) -> None:
-    response = await client.put(
-        "/v1/holders/me/profile-image",
-        files={"image": ("me.png", PNG_BYTES, "image/png")},
-        headers=holder.headers,
-    )
-
-    assert response.status_code == 200
-    assert response.json()["profile_image_url"] is not None
-    key = f"holders/{holder.holder_id}/profile-image.png"
-    assert storage.objects[key][1] == "image/png"
-
-
-async def test_profile_image_type_is_checked_from_content(
+async def test_update_rejects_unknown_fields(
     client: AsyncClient, holder: RegisteredHolder
 ) -> None:
     response = await client.put(
-        "/v1/holders/me/profile-image",
-        files={"image": ("me.png", b"<svg>not a png</svg>", "image/png")},
+        "/v1/holder/update",
+        json={"email": "new@example.com"},
         headers=holder.headers,
     )
 
-    assert response.status_code == 415
-
-
-async def test_profile_image_size_is_limited(
-    client: AsyncClient,
-    holder: RegisteredHolder,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(get_settings(), "max_profile_image_bytes", 32)
-
-    response = await client.put(
-        "/v1/holders/me/profile-image",
-        files={"image": ("me.png", PNG_BYTES, "image/png")},
-        headers=holder.headers,
-    )
-
-    assert response.status_code == 413
+    assert response.status_code == 422
+    assert response.json()["errors"][0]["field"] == "email"

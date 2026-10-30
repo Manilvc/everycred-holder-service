@@ -59,12 +59,26 @@ source unchanged.
 
 Errors:
 
-| Status | `error.code` | When |
-|--------|--------------|------|
-| 400 | connector code (`unknown_operation`, `source_required`, `invalid_params`) | Connector rejected the call |
-| 404 | `not_found` | Unknown source for this holder |
-| 422 | `validation_error` | A path value outside `^[A-Za-z0-9._:-]{1,128}$` |
-| 502 | `external_service_error` | Connector unavailable |
+Errors use the DCS envelope `{"status", "data", "message"}`.
+
+| Status | `message` | When |
+|--------|-----------|------|
+| 400 | The connector's message | Connector rejected the call (unknown operation, missing source, invalid params) |
+| 404 | The connector's message | Unknown source for this holder |
+| 422 | `<field> <reason>` | A path value outside `^[A-Za-z0-9._:-]{1,128}$` |
+| 502 | The credential network is unavailable. | Connector unavailable |
+
+The wallet app's DCS paths are also served, in the DCS envelope and
+shapes rather than one item per source (`wallet_router.py`):
+
+| Method | Path | Operation(s) |
+|---|---|---|
+| GET | `/v1/holder/subject/requests?page&size&search` (deprecated `/v1/subject/requests`, unpaged) | `requests.list`, merged across sources, newest first, `source_code` on each item |
+| GET | `/v1/holder/request/{request_id}` (deprecated `/v1/request/{request_id}`) | `requests.find` (all sources); the one that has it answers |
+| POST | `/v1/holder/request/submission` (deprecated `/v1/request/submission`) | `requests.find`, then `requests.submit` at that source |
+
+A source that fails a list is left out and logged. If a request id is
+found in more than one source, the first is used and a warning logged.
 
 ## Design decisions
 
@@ -75,12 +89,16 @@ Errors:
 
 ## Known limitations
 
-- DCS must accept these calls from the connector on behalf of a holder
-  email (service-to-service), instead of a DCS holder JWT. That DCS-side
-  endpoint set does not exist yet.
+- DCS answers these calls on its internal holder API
+  (`/v1/internal/holder/*` in everycred-backend, see its
+  `docs/connector_integration.md`), which acts for a holder email sent
+  by the connector instead of a DCS holder JWT.
+- The connector forwards no query string, so DCS lists return their
+  first 100 items per source.
 - The DigiLocker wallet callback (`GET /v1/sure-pass/digilocker/wallet-callback`)
   and integration callback stay on DCS; they are browser redirects.
 
 ## Testing
 
-`tests/features/gateway/test_gateway.py`.
+`tests/features/gateway/test_gateway.py` and
+`tests/features/gateway/test_wallet_requests.py`.

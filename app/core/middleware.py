@@ -16,7 +16,7 @@ from starlette.datastructures import Headers, MutableHeaders
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from app.core.context import REQUEST_ID_HEADER, request_id_context
-from app.core.exceptions import build_error_body
+from app.core.responses import build_envelope
 
 logger = logging.getLogger(__name__)
 
@@ -86,8 +86,9 @@ class RequestContextMiddleware:
                 raise
             error_response = JSONResponse(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                content=build_error_body(
-                    "internal_error", "An unexpected error occurred."
+                content=build_envelope(
+                    status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    "Woops, something's not quite right, please try again!",
                 ),
             )
             await error_response(scope, receive, send_with_request_id)

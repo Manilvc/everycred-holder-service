@@ -1,6 +1,6 @@
 """Helpers for reading request bodies and uploaded files safely."""
 
-from fastapi import Request, UploadFile
+from fastapi import Request
 
 from app.core.exceptions import PayloadTooLargeError
 
@@ -8,23 +8,6 @@ _IMAGE_SIGNATURES: dict[str, tuple[bytes, ...]] = {
     "image/png": (b"\x89PNG\r\n\x1a\n",),
     "image/jpeg": (b"\xff\xd8\xff",),
 }
-
-
-async def read_limited(upload: UploadFile, max_bytes: int) -> bytes:
-    """Return the upload's content, refusing anything over ``max_bytes``.
-
-    At most one byte more than the limit is read, so an oversized file
-    is never held in memory in full.
-
-    Raises:
-        PayloadTooLargeError: The file is larger than ``max_bytes``.
-    """
-    content = await upload.read(max_bytes + 1)
-    if len(content) > max_bytes:
-        raise PayloadTooLargeError(
-            f"The file must not be larger than {max_bytes} bytes."
-        )
-    return content
 
 
 async def read_body_limited(request: Request, max_bytes: int) -> bytes:

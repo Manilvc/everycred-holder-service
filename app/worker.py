@@ -1,11 +1,12 @@
-"""Background worker: sends queued notifications over socket and push.
+"""Background worker: sends queued notifications and registration reports.
 
 Run one instance per deployment::
 
     python -m app.worker
 
 Every ``WORKER_INTERVAL_SECONDS`` it sends the notification deliveries
-that are due, retrying failures with backoff.
+that are due over socket and push, and reports new registrations to DCS
+sources through the connector, retrying failures with backoff.
 
 After each successful round it touches :data:`HEARTBEAT_FILE`; the
 container health check (``python -m app.worker --check``) reports
@@ -13,7 +14,7 @@ unhealthy when the file is older than :data:`HEARTBEAT_MAX_AGE_SECONDS`,
 for example because the database has been unreachable for a while.
 
 Deliveries are not locked between processes, so running two workers at
-once could send a notification twice.
+once could send a notification or a report twice.
 """
 
 import asyncio
@@ -28,6 +29,7 @@ from pathlib import Path
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core.config import Settings, get_settings
+from app.core.connector import ConnectorClient
 from app.core.database import create_database_engine, create_session_factory
 from app.core.http_client import create_http_client
 from app.core.logging import configure_logging
@@ -39,6 +41,7 @@ from app.features.notifications.channels import (
     create_socket_publisher,
 )
 from app.features.notifications.service import NotificationDeliveryService
+from app.features.onboarding.service import RegistrationReportService
 
 logger = logging.getLogger("app.worker")
 
@@ -53,13 +56,20 @@ async def run_once(
     settings: Settings,
     socket_publisher: SocketPublisher | None,
     push_sender: PushSender | None,
+    connector: ConnectorClient,
 ) -> int:
-    """Send one batch of due deliveries and return how many ran."""
+    """Send one batch of deliveries and reports; return how many ran."""
     async with session_factory() as session:
-        service = NotificationDeliveryService(
+        delivery_service = NotificationDeliveryService(
             session, settings, socket_publisher, push_sender
         )
-        return await service.deliver_due(BATCH_SIZE)
+        delivered = await delivery_service.deliver_due(BATCH_SIZE)
+    async with session_factory() as session:
+        report_service = RegistrationReportService(
+            session, settings, connector
+        )
+        reported = await report_service.deliver_due(BATCH_SIZE)
+    return delivered + reported
 
 
 async def run_forever(stop: asyncio.Event) -> None:
@@ -70,6 +80,7 @@ async def run_forever(stop: asyncio.Event) -> None:
     http_client = create_http_client(settings)
     socket_publisher = create_socket_publisher(settings)
     push_sender = create_push_sender(settings, http_client)
+    connector = ConnectorClient(http_client, settings)
     logger.info(
         "Worker started; socket %s, push %s, every %s s",
         "on" if socket_publisher else "off",
@@ -80,11 +91,17 @@ async def run_forever(stop: asyncio.Event) -> None:
         while not stop.is_set():
             try:
                 sent = await run_once(
-                    session_factory, settings, socket_publisher, push_sender
+                    session_factory,
+                    settings,
+                    socket_publisher,
+                    push_sender,
+                    connector,
                 )
                 HEARTBEAT_FILE.touch()
                 if sent:
-                    logger.info("Worker round: %s deliveries", sent)
+                    logger.info(
+                        "Worker round: %s deliveries and reports", sent
+                    )
             except Exception:
                 # A database or network blip must not kill the worker;
                 # the next round tries again.

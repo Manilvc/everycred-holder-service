@@ -1,31 +1,32 @@
-"""Request and response models for the holder profile."""
+"""Request models and field rules for the holder profile.
 
-import uuid
-from datetime import datetime
+Field names, patterns and ``extra`` handling copy the DCS schemas the
+wallet app was written against (``UpdateHolder`` and friends).
+"""
 
-from pydantic import BaseModel, ConfigDict, Field
+from typing import Annotated
 
-from app.features.auth.schemas import MobileNumber
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
+# DCS rule: optional "+", then 10 digits not starting with 0.
+ContactNumber = Annotated[str, StringConstraints(pattern=r"^\+?[1-9]\d{9}$")]
 
-class HolderProfileResponse(BaseModel):
-    """The signed-in holder's profile, with short-lived file URLs."""
-
-    id: uuid.UUID
-    email: str
-    did: str
-    full_name: str
-    mobile: str | None
-    profile_image_url: str | None
-    did_qr_code_url: str | None
-    did_profile_url: str | None
-    created_at: datetime
+# Base64 of an image up to a few MB; the decoded size is checked against
+# MAX_PROFILE_IMAGE_BYTES in the service.
+_MAX_BASE64_CHARS = 16 * 1024 * 1024
 
 
-class HolderProfileUpdate(BaseModel):
-    """Fields a holder may change; omitted fields stay as they are."""
+class UpdateHolder(BaseModel):
+    """Body of ``PUT /v1/holder/update``; omitted fields stay as they are.
+
+    ``profile_image`` is raw base64 without a ``data:`` prefix, as the
+    wallet app sends it.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
-    full_name: str | None = Field(default=None, min_length=1, max_length=150)
-    mobile: MobileNumber | None = None
+    name: str | None = Field(default=None, min_length=1, max_length=150)
+    contact: ContactNumber | None = None
+    profile_image: str | None = Field(
+        default=None, min_length=1, max_length=_MAX_BASE64_CHARS
+    )

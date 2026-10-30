@@ -1,57 +1,73 @@
-# Wallet Storage
+# Wallet storage
 
 > Package: `app/features/wallet_storage/`
-> Owner: EveryCRED backend team
-> Last updated: 2026-10-21
+> Last updated: 2026-10-22
 
 ## Overview
 
-The wallet builds and signs a verifiable presentation on the device,
-uploads it here, and shares the returned short-lived URL, for example as
-a QR code. Replaces DCS `POST /v1/holder/storage`.
+Temporary storage of verifiable presentations the wallet shares. The
+app uploads a presentation and puts the returned URL in a QR code; the
+URL works for the window the app asks for.
 
 ## Endpoints
 
 | Method | Path | Summary | Auth |
 |--------|------|---------|------|
-| POST | `/v1/holders/me/storage` | Store a presentation (multipart `file`) | bearer |
+| POST | `/v1/holder/storage` | Store a presentation | bearer |
 
-Response `201 Created`:
+### `POST /v1/holder/storage`
+
+Request:
 
 ```json
 {
-  "presentation_id": "00000000-0000-0000-0000-000000000000",
-  "url": "https://files.example.com/...",
-  "url_expires_in_seconds": 900
+  "data": { "@context": ["https://www.w3.org/ns/credentials/v2"], "type": ["VerifiablePresentation"] },
+  "valid_from": "2026-10-22T10:00:00Z",
+  "valid_until": "2026-10-22T10:10:00Z"
 }
 ```
 
-Errors:
+Response `201` "Data Uploaded Successfully!":
 
-| Status | `error.code` | When |
-|--------|--------------|------|
-| 400 | `invalid_presentation` | Not a UTF-8 JSON object |
-| 413 | `payload_too_large` | Over `MAX_PRESENTATION_BYTES` |
+```json
+{
+  "file_path": "https://bucket.s3.amazonaws.com/holder-service/holders/<uuid>/presentations/<id>.json?X-Amz-...",
+  "valid_from": "2026-10-22T10:00:00Z",
+  "valid_until": "2026-10-22T10:10:00Z"
+}
+```
+
+| Status | When |
+|--------|------|
+| 400 | `valid_until` not after `valid_from`, in the past, or the window is longer than allowed |
+| 413 | Presentation larger than `MAX_PRESENTATION_BYTES` |
 
 ## Flow
 
-Stored at `holders/<holder id>/presentations/<uuid>.json` and recorded
-as `presentation_stored` in the audit trail.
+`PresentationStorageService.store_presentation` checks the size and the
+window, writes `holders/<uuid>/presentations/<id>.json`, and asks the
+storage backend for a URL that expires at `valid_until`.
 
 ## Configuration
 
 | Env var | Default | Purpose |
 |---------|---------|---------|
-| `MAX_PRESENTATION_BYTES` | `1048576` | Upload limit |
-| `STORAGE_URL_TTL_SECONDS` | `900` | URL lifetime (S3) |
+| `MAX_PRESENTATION_BYTES` | `1048576` | Largest presentation |
+| `PRESENTATION_DEFAULT_WINDOW_SECONDS` | `300` | Window when no dates are sent |
+| `PRESENTATION_MAX_WINDOW_SECONDS` | `604800` | Longest window (S3 limit) |
+
+## Design decisions
+
+- **A missing date is filled in** (start: now; end: start plus the
+  default window) instead of failing, which the DCS did with a 500.
+- **Local storage URLs do not expire**, which is one reason local
+  storage is refused in production.
 
 ## Known limitations
 
-- Objects are not deleted automatically; add an S3 lifecycle rule on
-  the `presentations/` prefix.
-- The signature inside the presentation is not verified here; verifiers
-  check it against the holder's DID document.
+- Stored presentations are not deleted after their window; add an S3
+  lifecycle rule on the `presentations/` prefix.
 
 ## Testing
 
-`tests/features/wallet_storage/test_presentations.py`.
+- `tests/features/wallet_storage/test_presentations.py`

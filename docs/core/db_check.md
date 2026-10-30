@@ -1,11 +1,12 @@
 # `app/core/db_check.py`
 
-> Last updated: 2026-10-21
+> Last updated: 2026-10-29
 
 ## Purpose
 
 Run before migrations (`python -m app.core.db_check`, called by the
-container's `migrate` command). It waits for the database and, on
+container's `migrate` command, and by `serve` unless
+`MIGRATE_ON_START=false`). It waits for the database and, on
 failure, prints what went wrong and how to fix it instead of a driver
 traceback. Invalid settings are reported one line per problem, without
 echoing values, because pydantic's own message would print secrets.

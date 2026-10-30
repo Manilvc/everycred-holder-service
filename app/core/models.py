@@ -6,6 +6,7 @@ and returns it as an aware UTC datetime, so application code can always
 compare against ``datetime.now(UTC)`` without ``TypeError``.
 """
 
+import secrets
 import uuid
 from datetime import UTC, datetime
 
@@ -13,10 +14,31 @@ from sqlalchemy import DateTime, Dialect, Uuid
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.types import TypeDecorator
 
+# Public numeric ids stay below 2**53 so JavaScript clients (the wallet
+# app) can hold them in a number without losing precision.
+_PUBLIC_ID_UPPER_BOUND = 2**52
+
 
 def utc_now() -> datetime:
     """Return the current time as an aware UTC datetime."""
     return datetime.now(UTC)
+
+
+def to_naive_iso(value: datetime | None) -> str | None:
+    """Format a datetime the way the DCS does: naive UTC ISO-8601."""
+    if value is None:
+        return None
+    return value.astimezone(UTC).replace(tzinfo=None).isoformat()
+
+
+def generate_public_id() -> int:
+    """Return a random positive integer id that is safe in JavaScript.
+
+    The wallet app identifies holders and credentials by integer ids.
+    Random values (rather than a sequence) do not reveal how many rows
+    exist and cannot be guessed by counting.
+    """
+    return secrets.randbelow(_PUBLIC_ID_UPPER_BOUND - 1) + 1
 
 
 class UTCDateTime(TypeDecorator[datetime]):

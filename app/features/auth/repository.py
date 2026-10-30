@@ -71,6 +71,31 @@ class AuthRepository:
             .limit(1)
         )
 
+    async def get_otp_by_login_token(
+        self, login_token_hash: str
+    ) -> EmailOtp | None:
+        """Return the OTP that issued the login token, if any."""
+        return await self.session.scalar(
+            select(EmailOtp).where(
+                EmailOtp.login_token_hash == login_token_hash
+            )
+        )
+
+    async def claim_login_token(
+        self, otp_id: uuid.UUID, signed_in_at: datetime
+    ) -> bool:
+        """Mark an OTP's login token used; False if it already was.
+
+        A conditional update, so two concurrent requests with the same
+        token cannot both claim it.
+        """
+        result = await self.session.execute(
+            update(EmailOtp)
+            .where(EmailOtp.id == otp_id, EmailOtp.signed_in_at.is_(None))
+            .values(signed_in_at=signed_in_at)
+        )
+        return result.rowcount == 1
+
     async def get_reset_token(
         self, token_hash: str
     ) -> PasswordResetToken | None:

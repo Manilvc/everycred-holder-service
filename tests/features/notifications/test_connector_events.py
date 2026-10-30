@@ -67,7 +67,7 @@ async def test_wrong_secret_is_rejected(
     )
 
     assert response.status_code == 401
-    assert response.json()["error"]["code"] == "invalid_signature"
+    assert response.json()["message"] == "The signature is invalid."
 
 
 async def test_stale_signature_is_rejected(
@@ -118,7 +118,7 @@ async def test_signed_but_invalid_body_is_rejected(
     response = await post_event(client, payload)
 
     assert response.status_code == 400
-    assert response.json()["error"]["code"] == "invalid_event"
+    assert response.json()["message"] == "The event body is invalid."
 
 
 async def test_request_declined_event_maps_to_declined_notification(

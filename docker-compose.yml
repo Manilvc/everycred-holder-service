@@ -2,7 +2,7 @@
 # backend on the same host.
 #
 # Public URL: https://<api-host>/holder/...
-# nginx on the host strips /holder and proxies to 127.0.0.1:8040
+# nginx on the host strips /holder and proxies to 127.0.0.1:8041
 # (see deploy/nginx/holder-subpath.conf). MySQL is the existing server,
 # reached through DATABASE_URL in .env; no database container is started.
 #
@@ -62,9 +62,11 @@ services:
       migrate:
         condition: service_completed_successfully
     environment:
+      # The `migrate` service has already applied them.
+      MIGRATE_ON_START: "false"
       # Must match the nginx location; uvicorn uses it to build URLs.
       ROOT_PATH: /holder
-      PORT: "8040"
+      PORT: "8041"
       WEB_CONCURRENCY: "2"
       # Only nginx on the host can reach the published port (below), and
       # its requests arrive from the Docker bridge gateway, so trusting all
@@ -72,7 +74,8 @@ services:
       FORWARDED_ALLOW_IPS: "*"
     ports:
       # Loopback only: the service is reachable solely through nginx.
-      - "127.0.0.1:8040:8040"
+      # 8041, because another service on the host already uses 8040.
+      - "127.0.0.1:8041:8041"
     restart: always
     mem_limit: 768m
     cpus: "1.0"
@@ -82,7 +85,7 @@ services:
         - CMD
         - python
         - -c
-        - "import sys, urllib.request; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8040/health/live', timeout=3).status == 200 else 1)"
+        - "import sys, urllib.request; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8041/health/live', timeout=3).status == 200 else 1)"
       interval: 15s
       timeout: 5s
       start_period: 20s

@@ -1,126 +1,230 @@
-"""HTTP routes for the holder's credentials."""
+"""Credential routes, at the DCS paths the wallet app calls.
 
-from fastapi import APIRouter, status
+The first four need the holder's token. The last two are the DCS public
+verifier endpoints, which the app calls on the same base URL; they need
+no token.
+"""
+
+from typing import Annotated, Any
+
+from fastapi import APIRouter, Path, Query, status
 from fastapi.responses import JSONResponse
 
-from app.core.connector import NormalizedCredential, OperationResponse
+from app.core.responses import respond
 from app.features.auth.dependencies import CurrentHolder
 from app.features.credentials.dependencies import CredentialServiceDep
 from app.features.credentials.schemas import (
-    CredentialEmailRequest,
-    CredentialListResponse,
-    CredentialShareResponse,
+    CredentialEmailShareRequest,
+    CredentialType,
+    VerificationAnalyticsRequest,
 )
-from app.shared.identifiers import ExternalId, SourceCode
-from app.shared.schemas import ErrorResponse
+from app.shared.identifiers import EXTERNAL_ID_PATTERN
+from app.shared.schemas import DcsResponse, ErrorResponse
 
 router = APIRouter(tags=["Credentials"])
 
-_NOT_FOUND = {status.HTTP_404_NOT_FOUND: {"model": ErrorResponse}}
-_UPSTREAM_ERRORS = {status.HTTP_502_BAD_GATEWAY: {"model": ErrorResponse}}
+AnyResponse = DcsResponse[Any]
+_AUTH_ERRORS = {
+    status.HTTP_401_UNAUTHORIZED: {"model": ErrorResponse},
+    status.HTTP_404_NOT_FOUND: {"model": ErrorResponse},
+    status.HTTP_502_BAD_GATEWAY: {"model": ErrorResponse},
+}
+CredentialRefId = Annotated[
+    int, Query(ge=1, description="The credential's ``id`` from the list.")
+]
+CredentialUniqueId = Annotated[str, Path(pattern=EXTERNAL_ID_PATTERN)]
 
 
 @router.get(
-    "/credentials",
-    response_model=CredentialListResponse,
+    "/user/holder/credentials",
+    response_model=AnyResponse,
     summary="List my credentials",
-    responses=_UPSTREAM_ERRORS,
+    responses={
+        **_AUTH_ERRORS,
+        status.HTTP_403_FORBIDDEN: {"model": ErrorResponse},
+    },
 )
 async def list_credentials(
-    holder: CurrentHolder, service: CredentialServiceDep
-) -> CredentialListResponse:
-    """Return credentials from every DCS source issued to the holder."""
-    return await service.list_credentials(holder)
-
-
-@router.get(
-    "/credentials/{credential_id}",
-    response_model=NormalizedCredential,
-    summary="Get one of my credentials",
-    responses={**_NOT_FOUND, **_UPSTREAM_ERRORS},
-)
-async def get_credential(
-    credential_id: ExternalId,
+    holder_id: Annotated[int, Query()],
+    type: Annotated[CredentialType, Query()],  # noqa: A002 - DCS name
     holder: CurrentHolder,
     service: CredentialServiceDep,
-) -> NormalizedCredential:
-    """Return a credential; 404 if it is not the holder's."""
-    return await service.get_credential(holder, credential_id)
+    page: Annotated[int, Query(ge=0)] = 1,
+    per_page: Annotated[int, Query(ge=0, le=100)] = 0,
+) -> JSONResponse:
+    """Return one bucket (issued, revoked, expired) of credentials.
+
+    ``holder_id`` must be the caller's ``id`` from ``GET /v1/holder``.
+    An empty bucket answers 404 with ``data.total`` 0, as the DCS does.
+    """
+    result = await service.list_credentials(
+        holder, holder_id, type, page, per_page
+    )
+    return respond(
+        status.HTTP_200_OK, "Credentials are fetched successfully", result
+    )
 
 
 @router.get(
-    "/credentials/{credential_id}/share",
-    response_model=CredentialShareResponse,
-    summary="Get the share link of a credential",
-    responses={**_NOT_FOUND, **_UPSTREAM_ERRORS},
+    "/holder/credential/share",
+    response_model=AnyResponse,
+    summary="Get what is needed to share a credential",
+    responses=_AUTH_ERRORS,
 )
 async def share_credential(
-    credential_id: ExternalId,
-    holder: CurrentHolder,
-    service: CredentialServiceDep,
-) -> CredentialShareResponse:
-    """Return the public verification link and QR code URL."""
-    return await service.share_credential(holder, credential_id)
-
-
-@router.get(
-    "/credentials/{credential_id}/download",
-    summary="Download a credential document",
-    response_class=JSONResponse,
-    responses={**_NOT_FOUND, **_UPSTREAM_ERRORS},
-)
-async def download_credential(
-    credential_id: ExternalId,
+    cred_id: CredentialRefId,
     holder: CurrentHolder,
     service: CredentialServiceDep,
 ) -> JSONResponse:
-    """Return the W3C credential JSON as a file download."""
-    credential = await service.download_credential(holder, credential_id)
-    return JSONResponse(
-        credential.credential_json,
-        headers={
-            "Content-Disposition": (
-                f'attachment; filename="credential-{credential_id}.json"'
-            )
-        },
+    """Return the QR image, verifier link and logo of a credential."""
+    result = await service.share_credential(holder, cred_id)
+    return respond(
+        status.HTTP_200_OK, "Credentials share successfully!", result
+    )
+
+
+@router.get(
+    "/holder/credential/preview",
+    response_model=AnyResponse,
+    summary="Preview a credential's fields",
+    responses=_AUTH_ERRORS,
+)
+async def preview_credential(
+    cred_id: CredentialRefId,
+    holder: CurrentHolder,
+    service: CredentialServiceDep,
+) -> JSONResponse:
+    """Return the credential's fields, validity and revocation state."""
+    result = await service.preview_credential(holder, cred_id)
+    return respond(
+        status.HTTP_200_OK, "Credential preview fetched successfully!", result
+    )
+
+
+@router.get(
+    "/holder/credential/download",
+    response_model=AnyResponse,
+    summary="Get the download link of a credential",
+    responses={
+        **_AUTH_ERRORS,
+        status.HTTP_400_BAD_REQUEST: {"model": ErrorResponse},
+    },
+)
+async def download_credential(
+    cred_id: CredentialRefId,
+    holder: CurrentHolder,
+    service: CredentialServiceDep,
+) -> JSONResponse:
+    """Return ``{"credential": <link to the credential document>}``."""
+    result = await service.download_credential(holder, cred_id)
+    return respond(
+        status.HTTP_200_OK, "Credential downloaded successfully!", result
     )
 
 
 @router.post(
-    "/credentials/{credential_id}/email",
-    status_code=status.HTTP_202_ACCEPTED,
-    summary="Email a credential link",
+    "/holder/send/email",
+    response_model=AnyResponse,
+    summary="Email a credential to other people",
     responses={
-        **_NOT_FOUND,
-        **_UPSTREAM_ERRORS,
-        status.HTTP_429_TOO_MANY_REQUESTS: {"model": ErrorResponse},
+        **_AUTH_ERRORS,
+        status.HTTP_400_BAD_REQUEST: {"model": ErrorResponse},
     },
 )
 async def email_credential(
-    credential_id: ExternalId,
-    payload: CredentialEmailRequest,
+    cred_id: CredentialRefId,
+    payload: CredentialEmailShareRequest,
     holder: CurrentHolder,
     service: CredentialServiceDep,
-) -> None:
-    """Send the credential's verification link to a recipient."""
+) -> JSONResponse:
+    """Send each address the credential's verifier link and id."""
     await service.email_credential(
-        holder, credential_id, payload.recipient_email, payload.note
+        holder, cred_id, [str(email) for email in payload.holder_email]
+    )
+    return respond(status.HTTP_200_OK, "Email sent successfully!")
+
+
+@router.get(
+    "/holder/stats",
+    response_model=AnyResponse,
+    summary="Get verification statistics of a credential",
+    responses=_AUTH_ERRORS,
+)
+async def get_credential_stats(
+    cred_id: CredentialRefId,
+    page: Annotated[int, Query(ge=0)],
+    per_page: Annotated[int, Query(ge=0, le=100)],
+    holder: CurrentHolder,
+    service: CredentialServiceDep,
+) -> JSONResponse:
+    """Return the issuing DCS's analytics for the credential.
+
+    ``page`` and ``per_page`` are accepted for compatibility; the
+    connector does not forward them yet, so the source's first page is
+    returned.
+    """
+    status_code, message, data = await service.get_stats(holder, cred_id)
+    return respond(status_code, message, data)
+
+
+@router.get(
+    "/holder/credential/notification",
+    response_model=AnyResponse,
+    summary="List issue and revoke notifications",
+    responses=_AUTH_ERRORS,
+)
+async def list_credential_notifications(
+    holder: CurrentHolder,
+    service: CredentialServiceDep,
+    page: Annotated[int, Query(ge=1)] = 1,
+    per_page: Annotated[int, Query(ge=1, le=100)] = 10,
+) -> JSONResponse:
+    """Return notifications newest first; empty is 200 with no items."""
+    result = await service.list_notifications(holder, page, per_page)
+    return respond(
+        status.HTTP_200_OK, "Notification received successfully!", result
     )
 
 
 @router.get(
-    "/sources/{source_code}/credentials/{credential_id}/stats",
-    response_model=OperationResponse,
-    summary="Get verification statistics of a credential",
-    responses={**_NOT_FOUND, **_UPSTREAM_ERRORS},
+    "/user/credential/{credential_unique_id}",
+    response_model=AnyResponse,
+    summary="Look up any credential (public verifier)",
+    responses={
+        status.HTTP_404_NOT_FOUND: {"model": ErrorResponse},
+        status.HTTP_502_BAD_GATEWAY: {"model": ErrorResponse},
+    },
 )
-async def get_credential_stats(
-    source_code: SourceCode,
-    credential_id: ExternalId,
-    holder: CurrentHolder,
+async def get_public_credential(
+    credential_unique_id: CredentialUniqueId,
     service: CredentialServiceDep,
-) -> OperationResponse:
-    """Return the source's verification analytics for a credential."""
-    return await service.get_verification_stats(
-        holder, source_code, credential_id
+) -> JSONResponse:
+    """Return the credential in the DCS verifier shape; no token needed."""
+    result = await service.get_public_credential(credential_unique_id)
+    return respond(
+        status.HTTP_200_OK, "Verification completed successfully!", result
     )
+
+
+@router.post(
+    "/credential/verification/analytics",
+    response_model=AnyResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Record a verification of a credential",
+    responses={
+        status.HTTP_400_BAD_REQUEST: {"model": ErrorResponse},
+        status.HTTP_404_NOT_FOUND: {"model": ErrorResponse},
+    },
+)
+async def record_verification(
+    uuid: Annotated[
+        str, Query(pattern=EXTERNAL_ID_PATTERN, description="Unique id")
+    ],
+    payload: VerificationAnalyticsRequest,
+    service: CredentialServiceDep,
+) -> JSONResponse:
+    """Forward a verification result to the issuing DCS; no token needed."""
+    status_code, message, data = await service.record_verification(
+        uuid, payload
+    )
+    return respond(status_code, message, data)

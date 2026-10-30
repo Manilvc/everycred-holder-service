@@ -19,10 +19,12 @@ from sqlalchemy.ext.asyncio import create_async_engine
 # import here for every new feature's models module.
 import app.features.audit.models  # noqa: F401
 import app.features.auth.models  # noqa: F401
+import app.features.credentials.models  # noqa: F401
 import app.features.devices.models  # noqa: F401
 import app.features.dids.models  # noqa: F401
 import app.features.holders.models  # noqa: F401
 import app.features.notifications.models  # noqa: F401
+import app.features.onboarding.models  # noqa: F401
 from app.core.config import get_settings
 from app.core.database import Base
 from app.core.models import UTCDateTime

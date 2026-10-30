@@ -7,8 +7,10 @@ from datetime import datetime
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.models import utc_now
 from app.features.notifications.models import (
     ConnectorEvent,
+    DeliveryChannel,
     DeliveryStatus,
     InboxNotification,
     NotificationDelivery,
@@ -27,6 +29,26 @@ class NotificationRepository:
     ) -> None:
         """Stage a new row for insertion."""
         self.session.add(row)
+
+    async def add_notifications(
+        self, notifications: Sequence[InboxNotification]
+    ) -> None:
+        """Stage inbox entries and one pending delivery per channel each."""
+        self.session.add_all(notifications)
+        # Delivery rows reference the inbox rows by foreign key, and the
+        # models declare no relationships to order the inserts.
+        await self.session.flush()
+        now = utc_now()
+        self.session.add_all(
+            NotificationDelivery(
+                notification_id=notification.id,
+                holder_id=notification.holder_id,
+                channel=channel.value,
+                next_attempt_at=now,
+            )
+            for notification in notifications
+            for channel in DeliveryChannel
+        )
 
     async def has_event(self, delivery_id: str) -> bool:
         """Return True if a delivery with this id was already received."""

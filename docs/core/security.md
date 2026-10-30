@@ -32,8 +32,17 @@ and the `CurrentHolder` dependency are its only callers.
 
 - `create_access_token(holder_id, session_id, expires_at, settings)` —
   signs a token with `typ=access` and `sid=<session id>`.
-- `create_registration_token(email, settings)` — signs a short-lived
-  `typ=registration` token after OTP verification.
+- `create_email_verification_token(holder_id, expires_at, settings)` —
+  signs a token with `typ=email_verification` and no session, for
+  `/v1/holder/email/verify`. `decode_token` refuses it as an access
+  token and an access token as it, because the `typ` must match.
+- `create_recovery_token(holder_id, settings) -> str` and
+  `read_recovery_token(token, settings) -> UUID` — the token login
+  returns for a recently deleted account. It is a base64url payload
+  `{holder_id, type: "holder_recovery", exp}` plus an HMAC keyed with
+  `TOKEN_HASH_SECRET`, valid `RECOVERY_TOKEN_TTL_SECONDS`.
+  `read_recovery_token` raises `RecoveryTokenError` (`is_expired` set
+  for a genuine but old token).
 - `decode_token(token, expected_type, settings) -> TokenClaims` —
   verifies signature, issuer, audience, expiry, required claims, and the
   `typ`; raises `AuthenticationError` with one generic message.
@@ -56,7 +65,9 @@ holder_session_id = claims.session_id
    which blocks `alg: none` and algorithm-confusion attacks. The audience
    is `everycred-holder-service`, so tokens from other EveryCRED services
    are rejected even if a key were shared by mistake.
-4. The `typ` claim separates registration tokens from access tokens.
+4. Recovery tokens are not JWTs, so they can never pass as access
+   tokens; their HMAC message starts with a type label, so OTP and reset
+   hashes made with the same key cannot be replayed as one.
 5. An access token is only half the check: `CurrentHolder` also loads the
    session named by `sid` and rejects ended or expired sessions. That is
    what makes logout immediate without a token blacklist.
@@ -68,14 +79,14 @@ holder_session_id = claims.session_id
 | `JWT_SECRET_KEY` | required, 32+ chars | Signs all tokens |
 | `JWT_ALGORITHM` | `HS256` | HMAC algorithm |
 | `SESSION_LIFETIME_DAYS` | `30` | Access token and session lifetime |
-| `REGISTRATION_TOKEN_MINUTES` | `15` | Registration token lifetime |
-| `TOKEN_HASH_SECRET` | required, 32+ chars | Keys OTP and reset token hashes |
+| `RECOVERY_TOKEN_TTL_SECONDS` | `120` | Recovery token lifetime |
+| `TOKEN_HASH_SECRET` | required, 32+ chars | Keys OTP and reset token hashes and recovery tokens |
 
 ## Failure modes
 
 | Situation | Behaviour |
 |-----------|-----------|
-| Expired, tampered, wrong-audience, or wrong-type token | `AuthenticationError` (401, `authentication_failed`) |
+| Expired, tampered, wrong-audience, or wrong-type token | `AuthenticationError` (401, "Invalid token") |
 
 ## Changing this module
 
@@ -85,4 +96,5 @@ holder_session_id = claims.session_id
 ## Tests
 
 `tests/features/auth/test_auth.py` covers the flows end to end,
-including `test_registration_token_is_not_an_access_token`.
+including that a recovery token is refused as an access token
+(`test_delete_then_recover_account`).

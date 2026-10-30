@@ -17,10 +17,12 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from app.core.config import SettingsDep
 from app.core.database import DbSession
 from app.core.email import Mailer
-from app.core.exceptions import AuthenticationError
+from app.core.exceptions import AuthenticationError, NotAuthenticatedError
+from app.core.http_client import HttpClient
 from app.core.models import utc_now
 from app.core.security import TokenType, decode_token
 from app.core.storage import Storage
+from app.features.auth.google import GoogleIdTokenVerifier
 from app.features.auth.models import HolderSession
 from app.features.auth.repository import AuthRepository
 from app.features.auth.service import AuthService
@@ -43,7 +45,7 @@ def _parse_uuid(value: str | None) -> uuid.UUID:
     try:
         return uuid.UUID(str(value))
     except ValueError as exc:
-        raise AuthenticationError("Invalid or expired token.") from exc
+        raise AuthenticationError("Invalid token") from exc
 
 
 async def get_auth_context(
@@ -56,12 +58,13 @@ async def get_auth_context(
     """Return the holder and session behind the request's bearer token.
 
     Raises:
-        AuthenticationError: No token, an invalid token, or a token whose
-            session has ended or expired, or whose holder is inactive.
-            Every case returns the same message.
+        NotAuthenticatedError: No bearer token was sent.
+        AuthenticationError: An invalid token, or a token whose session
+            has ended or expired, or whose holder is inactive or deleted.
+            Every case returns the DCS message "Invalid token".
     """
     if credentials is None:
-        raise AuthenticationError("Authentication is required.")
+        raise NotAuthenticatedError("Not authenticated")
     claims = decode_token(credentials.credentials, TokenType.ACCESS, settings)
     holder_session = await AuthRepository(db_session).get_session(
         _parse_uuid(claims.session_id)
@@ -72,12 +75,12 @@ async def get_auth_context(
         or holder_session.expires_at <= utc_now()
         or str(holder_session.holder_id) != claims.subject
     ):
-        raise AuthenticationError("Invalid or expired token.")
+        raise AuthenticationError("Invalid token")
     holder = await HolderRepository(db_session).get_by_id(
         holder_session.holder_id
     )
-    if holder is None or not holder.is_active:
-        raise AuthenticationError("Invalid or expired token.")
+    if holder is None or not holder.is_active or holder.is_deleted:
+        raise AuthenticationError("Invalid token")
     return AuthContext(holder=holder, session=holder_session)
 
 
@@ -92,11 +95,21 @@ def get_current_holder(auth: CurrentAuth) -> Holder:
 CurrentHolder = Annotated[Holder, Depends(get_current_holder)]
 
 
+def get_google_id_token_verifier(
+    http_client: HttpClient, settings: SettingsDep
+) -> GoogleIdTokenVerifier:
+    """Build a verifier for Google sign-in with the shared HTTP client."""
+    return GoogleIdTokenVerifier(http_client, settings.google_client_ids)
+
+
 def get_auth_service(
     db_session: DbSession,
     settings: SettingsDep,
     mailer: Mailer,
     storage: Storage,
+    google_verifier: Annotated[
+        GoogleIdTokenVerifier, Depends(get_google_id_token_verifier)
+    ],
 ) -> AuthService:
     """Build an auth service bound to the request's session."""
     return AuthService(
@@ -104,6 +117,7 @@ def get_auth_service(
         settings=settings,
         mailer=mailer,
         did_provisioner=DidProvisioner(storage, settings),
+        google_verifier=google_verifier,
     )
 
 

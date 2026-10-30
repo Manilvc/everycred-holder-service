@@ -69,11 +69,12 @@ async def deliver(
 async def queue_event_with_device(
     client: AsyncClient, holder: RegisteredHolder
 ) -> None:
-    await client.put(
-        "/v1/holders/me/push-token",
+    registered = await client.put(
+        "/v1/push/holder/token",
         json={"token": FCM_TOKEN, "platform": "ios"},
         headers=holder.headers,
     )
+    assert registered.status_code == 200, registered.text
     await post_event(client, credential_event(holder.email))
 
 
@@ -91,7 +92,7 @@ async def test_worker_delivers_over_socket_and_push(
     assert deliveries["socket"].status == "delivered"
     assert deliveries["push"].status == "delivered"
     holder_id, payload = socket.published[0]
-    assert str(holder_id) == holder.holder_id
+    assert str(holder_id) == holder.uuid
     assert payload["notification_type"] == "credential_issued"
     token, message = push.sent[0]
     assert token == FCM_TOKEN

@@ -1,63 +1,54 @@
-"""HTTP routes for the signed-in holder's profile."""
+"""Profile routes, at the DCS paths the wallet app calls."""
 
-from typing import Annotated
+from typing import Any
 
-from fastapi import APIRouter, File, UploadFile, status
+from fastapi import APIRouter, status
+from fastapi.responses import JSONResponse
 
-from app.core.config import SettingsDep
+from app.core.responses import respond
 from app.features.auth.dependencies import CurrentHolder
 from app.features.holders.dependencies import HolderProfileServiceDep
-from app.features.holders.schemas import (
-    HolderProfileResponse,
-    HolderProfileUpdate,
-)
-from app.shared.schemas import ErrorResponse
-from app.shared.uploads import read_limited
+from app.features.holders.schemas import UpdateHolder
+from app.shared.schemas import DcsResponse, ErrorResponse
 
-router = APIRouter(prefix="/holders/me", tags=["Holder Profile"])
+router = APIRouter(tags=["Holder Profile"])
 
 
 @router.get(
-    "",
-    response_model=HolderProfileResponse,
+    "/holder",
+    response_model=DcsResponse[dict[str, Any]],
     summary="Get my profile",
+    responses={status.HTTP_401_UNAUTHORIZED: {"model": ErrorResponse}},
 )
-async def get_my_profile(
+async def get_holder(
     holder: CurrentHolder, service: HolderProfileServiceDep
-) -> HolderProfileResponse:
-    """Return the profile, including the DID and its QR code URL."""
-    return await service.get_profile(holder)
-
-
-@router.patch(
-    "",
-    response_model=HolderProfileResponse,
-    summary="Update my profile",
-)
-async def update_my_profile(
-    changes: HolderProfileUpdate,
-    holder: CurrentHolder,
-    service: HolderProfileServiceDep,
-) -> HolderProfileResponse:
-    """Change the name or mobile number."""
-    return await service.update_profile(holder, changes)
+) -> JSONResponse:
+    """Return the profile; ``data.id`` is the holder's integer id."""
+    detail = await service.build_detail(holder)
+    return respond(
+        status.HTTP_200_OK, "Holder retrieved successfully!", detail
+    )
 
 
 @router.put(
-    "/profile-image",
-    response_model=HolderProfileResponse,
-    summary="Replace my profile image",
+    "/holder/update",
+    response_model=DcsResponse[dict[str, Any]],
+    summary="Update my profile",
     responses={
-        status.HTTP_413_CONTENT_TOO_LARGE: {"model": ErrorResponse},
-        status.HTTP_415_UNSUPPORTED_MEDIA_TYPE: {"model": ErrorResponse},
+        status.HTTP_401_UNAUTHORIZED: {"model": ErrorResponse},
+        status.HTTP_422_UNPROCESSABLE_CONTENT: {"model": ErrorResponse},
     },
 )
-async def replace_my_profile_image(
-    image: Annotated[UploadFile, File(description="PNG, JPEG, or WebP")],
+async def update_holder(
+    changes: UpdateHolder,
     holder: CurrentHolder,
     service: HolderProfileServiceDep,
-    settings: SettingsDep,
-) -> HolderProfileResponse:
-    """Upload a profile image up to ``MAX_PROFILE_IMAGE_BYTES``."""
-    content = await read_limited(image, settings.max_profile_image_bytes)
-    return await service.replace_profile_image(holder, content)
+) -> JSONResponse:
+    """Change the name, contact number or profile image (raw base64)."""
+    detail = await service.update_profile(holder, changes)
+    return respond(
+        status.HTTP_200_OK,
+        # The DCS wording, typo included, because the app shows it.
+        "Your handler profile is updated successfully.",
+        detail,
+    )

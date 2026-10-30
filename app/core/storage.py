@@ -45,8 +45,12 @@ class ObjectStorage(Protocol):
     async def put(self, key: str, content: bytes, content_type: str) -> None:
         """Store ``content`` under ``key``, replacing any existing object."""
 
-    async def url_for(self, key: str) -> str:
-        """Return a URL the wallet can fetch the object from."""
+    async def url_for(self, key: str, ttl_seconds: int | None = None) -> str:
+        """Return a URL the wallet can fetch the object from.
+
+        ``ttl_seconds`` overrides the default URL lifetime where the
+        backend supports expiring URLs.
+        """
 
 
 class LocalStorage:
@@ -66,8 +70,8 @@ class LocalStorage:
         target = self.root / _check_key(key)
         await run_in_threadpool(self._write, target, content)
 
-    async def url_for(self, key: str) -> str:
-        """Return the static URL of ``key``."""
+    async def url_for(self, key: str, ttl_seconds: int | None = None) -> str:
+        """Return the static URL of ``key``; local URLs never expire."""
         return f"{self.public_base_url}/{_check_key(key)}"
 
     @staticmethod
@@ -112,13 +116,13 @@ class S3Storage:
             ServerSideEncryption="AES256",
         )
 
-    async def url_for(self, key: str) -> str:
+    async def url_for(self, key: str, ttl_seconds: int | None = None) -> str:
         """Return a presigned GET URL for ``key``."""
         return await run_in_threadpool(
             self._client.generate_presigned_url,
             "get_object",
             Params={"Bucket": self.bucket, "Key": self._full_key(key)},
-            ExpiresIn=self.url_ttl_seconds,
+            ExpiresIn=ttl_seconds or self.url_ttl_seconds,
         )
 
 

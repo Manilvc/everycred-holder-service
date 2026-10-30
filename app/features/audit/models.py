@@ -27,6 +27,8 @@ class AuditAction(StrEnum):
     CREDENTIAL_DOWNLOADED = "credential_downloaded"
     CREDENTIAL_EMAILED = "credential_emailed"
     PRESENTATION_STORED = "presentation_stored"
+    ACCOUNT_DELETED = "account_deleted"
+    ACCOUNT_RECOVERED = "account_recovered"
 
 
 class HolderAuditLog(UUIDPrimaryKeyMixin, Base):

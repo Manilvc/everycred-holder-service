@@ -5,7 +5,12 @@ import uuid
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.models import generate_public_id
 from app.features.holders.models import Holder
+
+# Candidates drawn per pick. One collision among 2**52 values is already
+# astronomically unlikely, so several at once never all collide.
+_NUMERIC_ID_CANDIDATES = 4
 
 
 class HolderRepository:
@@ -19,7 +24,10 @@ class HolderRepository:
         return await self.session.get(Holder, holder_id)
 
     async def get_by_email(self, email: str) -> Holder | None:
-        """Return the holder registered with ``email`` (lower-cased)."""
+        """Return the holder registered with ``email`` (lower-cased).
+
+        Deleted accounts are included; callers check ``is_deleted``.
+        """
         return await self.session.scalar(
             select(Holder).where(Holder.email == email.lower())
         )
@@ -41,6 +49,24 @@ class HolderRepository:
             )
         )
 
+    async def pick_unused_numeric_id(self) -> int:
+        """Return a random public id no holder uses yet, in one query."""
+        candidates = {
+            generate_public_id() for _ in range(_NUMERIC_ID_CANDIDATES)
+        }
+        taken = set(
+            await self.session.scalars(
+                select(Holder.numeric_id).where(
+                    Holder.numeric_id.in_(candidates)
+                )
+            )
+        )
+        return next(iter(candidates - taken))
+
     def add(self, holder: Holder) -> None:
         """Stage a new holder for insertion."""
         self.session.add(holder)
+
+    async def delete(self, holder: Holder) -> None:
+        """Remove a holder row and, by cascade, everything it owns."""
+        await self.session.delete(holder)

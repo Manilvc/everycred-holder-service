@@ -21,6 +21,10 @@ the source DCS links to that email, which is how ownership is enforced.
   `POST /v1/holders/credentials/lookup`.
 - `get_credential(holder_email, credential_id) -> NormalizedCredential`
   — `POST /v1/holders/credentials/get`; 404 if not the holder's.
+- `get_public_credential(credential_id) -> NormalizedCredential` —
+  `GET /v1/credentials/{id}`, for the public verifier lookup.
+- `record_verification(credential_id, body) -> OperationResult` —
+  `POST /v1/credentials/{id}/verification-analytics`.
 - `run_operation(holder_email, operation, *, source_code=None,
   params=None, body=None) -> OperationResponse` —
   `POST /v1/holders/operations`. `source_code=None` fans out to every
@@ -44,10 +48,15 @@ result = await connector.run_operation(
 `NormalizedCredential`, `CredentialIssuer`, `CredentialLookupItem`,
 `CredentialLookupResponse`, `OperationResult`, `OperationResponse` —
 the connector's contract, validated on every response.
+`NormalizedCredential` includes `credential_unique_id`, `subject_name`,
+`subject_logo_url`, `valid_from`, `valid_until` and
+`credential_json_content` (the original document string);
+`CredentialLookupItem` includes `first_seen_at` and
+`status_changed_at`.
 
 ## How it works
 
-1. `_post` sends JSON with `X-API-Key: CONNECTOR_API_KEY` and
+1. `_request` sends JSON with `X-API-Key: CONNECTOR_API_KEY` and
    `CONNECTOR_TIMEOUT_SECONDS`; the shared client adds `X-Request-ID`.
 2. Errors use the envelope `{"error": {"code", "message"}}` and are
    mapped by `_error_for`:
@@ -55,7 +64,7 @@ the connector's contract, validated on every response.
    | Connector status | Raised | Client sees |
    |------------------|--------|-------------|
    | 404 | `NotFoundError` | 404 |
-   | 400, 422 | `UpstreamRejectedError` | 400 with the connector's `error.code` |
+   | 400, 422 | `UpstreamRejectedError` | 400 with the connector's `error.message` |
    | other, timeout, network | `ExternalServiceError` | 502 |
 
 3. `_parse` validates the body against the expected model; an

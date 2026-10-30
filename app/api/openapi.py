@@ -15,50 +15,51 @@ Credentials, credential requests, and workflow steps stay in the DCS
 that issued them; this service fetches and forwards them through the
 EveryCRED connector and stores none of their content.
 
+## Wallet compatibility
+
+The routes the wallet app calls keep the DCS backend's paths, bodies,
+status codes and messages, so the app only changes
+`EXPO_PUBLIC_API_BASE_URL` to `<this host>/v1`. See
+`docs/wallet_compatibility.md`.
+
 ## Authentication
 
-Holders sign in with `POST /v1/auth/login` (email or DID and password)
-and send the returned token as `Authorization: Bearer <token>`. A token
-is bound to its session: signing out, changing the password, or
-resetting it ends sessions and their tokens stop working at once.
+Holders sign in with `POST /v1/holder/login` (email or DID and
+password) and send `data.token` as `Authorization: Bearer <token>`. A
+token is bound to its session: changing or resetting the password, or
+deleting the account, ends sessions and their tokens stop working.
 
 The connector authenticates its webhooks with the
 `X-EveryCRED-Signature` HMAC instead of a token.
 
-## Errors
+## Responses
 
-Every error response has the same shape:
+Every response, success or error, uses the DCS envelope:
 
 ```json
-{
-  "error": {
-    "code": "invalid_credentials",
-    "message": "Invalid email, DID or password.",
-    "request_id": "6f37b4e671f344f99e4a0736491737ea"
-  }
-}
+{"status": "fail", "data": null, "message": "Invalid token"}
 ```
 
-`code` is stable and safe to branch on; `message` is for people.
+`status` is `"success"` for 200, 201 and 202 and `"fail"` otherwise.
+Missing tokens, validation errors and unknown routes put the numeric
+HTTP status there instead, as the DCS does. `message` is meant to be
+shown to the user.
 
 ## Forwarded actions
 
 Credential request, workflow, integration KYC, and DigiLocker routes
 return one item per DCS source called, each with that source's
-`status_code`, `ok`, `data`, and `message`. List routes call every
-source the holder is linked to; item routes take the `source_code`
-from the list result.
+`status_code`, `ok`, `data`, and `message`.
 """
 
 OPENAPI_TAGS: list[dict[str, Any]] = [
     {"name": "Health", "description": "Liveness and readiness probes."},
     {
-        "name": "Auth",
+        "name": "Holder Account",
         "description": (
             "Registration with an emailed OTP, sign-in with email or DID, "
-            "sign-out, and password change and reset. Five wrong "
-            "passwords lock the account for 15 minutes by default, and "
-            "every sign-in failure returns the same error."
+            "password change and reset, and account deletion and "
+            "recovery. Paths and messages match the DCS backend."
         ),
     },
     {"name": "Holder Profile", "description": "The signed-in holder."},
@@ -76,7 +77,9 @@ OPENAPI_TAGS: list[dict[str, Any]] = [
         "name": "Credentials",
         "description": (
             "Credentials fetched live from the issuing DCS through the "
-            "connector. Nothing is stored by this service."
+            "connector, in the DCS response shapes. Nothing is stored "
+            "by this service. The public lookup and verification "
+            "analytics routes need no token."
         ),
     },
     {"name": "Credential Requests", "description": "Forwarded to DCS."},
@@ -103,7 +106,7 @@ TAG_GROUPS: list[dict[str, Any]] = [
     {
         "name": "Account",
         "tags": [
-            "Auth",
+            "Holder Account",
             "Holder Profile",
             "Holder Keys",
             "Devices",

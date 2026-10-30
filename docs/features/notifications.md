@@ -2,12 +2,13 @@
 
 > Package: `app/features/notifications/`
 > Owner: EveryCRED backend team
-> Last updated: 2026-10-21
+> Last updated: 2026-10-28
 
 ## Overview
 
-When a DCS issues or revokes a credential, or a credential request
-changes, the connector sends a signed webhook here. The service writes
+When a DCS issues or revokes a credential, a credential request
+changes, or an issuer invites a holder, the connector sends a signed
+webhook here. The service writes
 an inbox entry and delivers it live over the EveryCRED Socket service
 and FCM push. The wallet also reads and marks its inbox.
 
@@ -41,15 +42,23 @@ Headers: `X-EveryCRED-Event`, `X-EveryCRED-Delivery` (idempotency key),
 ```
 
 Response `202 Accepted`: `{"status": "accepted" | "duplicate" | "ignored"}`.
-`ignored` means no holder has that email.
+`ignored` means no holder has that email. A `holder.invited` event for
+an email without an account is kept for sign-up instead and answered
+`accepted` (see [onboarding](onboarding.md)).
+
+`holder.invited` carries `source_code`, `holder_email` and an optional
+`inviter_name` (up to 200 characters); `credential_id` and `request_id`
+are null.
 
 Errors:
 
-| Status | `error.code` | When |
-|--------|--------------|------|
-| 400 | `invalid_event` | Signed, but the body or delivery id is unusable |
-| 401 | `invalid_signature` | Missing, wrong, or stale signature |
-| 413 | `payload_too_large` | Body over 16 KB |
+Errors use the DCS envelope `{"status", "data", "message"}`.
+
+| Status | `message` | When |
+|--------|-----------|------|
+| 400 | A valid delivery id is required. / The event body is invalid. | Signed, but the delivery id or body is unusable |
+| 401 | The signature is invalid. | Missing, wrong, or stale signature |
+| 413 | The request body must not exceed … bytes. | Body over 16 KB |
 
 ## Flow
 
@@ -82,6 +91,7 @@ Event to notification type (values match the DCS holder registry):
 | `request.updated` | `approved` | `credential_request_approved` | `request/<request_id>` |
 | `request.updated` | `declined` | `credential_request_declined` | `request/<request_id>` |
 | `request.updated` | other | `credential_request_updated` | `request/<request_id>` |
+| `holder.invited` | — | `issuer_invitation` | none |
 
 The socket message is the shape DCS publishes, so the existing Socket
 service needs no change:
@@ -116,11 +126,15 @@ holder with no active device, marks the row `skipped`.
 
 ## Design decisions
 
+- **Deleted accounts get no notifications.** An event for a holder whose
+  account is deleted is recorded and answered `ignored`.
 - **Outbox, not inline sends.** The webhook answers in milliseconds and
   a Redis or FCM outage never loses a notification.
 - **Signature before parsing.** Nothing unauthenticated is interpreted.
 - **No email stored for events**; only the resolved holder id.
 - **Generic texts.** Events carry ids only; the wallet loads details.
+  An invite names the inviting organisation, since there is nothing
+  else to open.
 
 ## Known limitations
 

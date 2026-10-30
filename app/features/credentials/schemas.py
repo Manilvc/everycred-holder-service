@@ -1,34 +1,40 @@
-"""Request and response models for the holder's credentials."""
+"""Request models for the credential endpoints the wallet app calls."""
+
+from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
-from app.core.connector import CredentialLookupItem
+
+class CredentialType(StrEnum):
+    """Bucket of ``GET /v1/user/holder/credentials``."""
+
+    ISSUED = "issued"
+    REVOKED = "revoked"
+    EXPIRED = "expired"
 
 
-class CredentialListResponse(BaseModel):
-    """Every credential issued to the holder, across all DCS sources.
+class VerificationAnalyticsRequest(BaseModel):
+    """Body of ``POST /v1/credential/verification/analytics``.
 
-    An item whose source could not be reached has ``credential`` null
-    and an ``error``; the others are still returned.
+    Passed to the issuing DCS unchanged; the fields mirror the DCS
+    ``AnalyticsSchema``.
     """
 
-    items: list[CredentialLookupItem]
+    model_config = ConfigDict(extra="ignore")
+
+    verification_status: bool
+    stage: str | None = Field(default=None, max_length=100)
+    reason: str | None = Field(default=None, max_length=1000)
+    checkpoint_id: str | int | None = None
 
 
-class CredentialShareResponse(BaseModel):
-    """What the wallet needs to share a credential."""
+class CredentialEmailShareRequest(BaseModel):
+    """Body of ``POST /v1/holder/send/email`` (the DCS ``CredentialShare``).
 
-    credential_id: str
-    source_code: str
-    title: str | None
-    share_url: str | None
-    qr_code_url: str | None
-
-
-class CredentialEmailRequest(BaseModel):
-    """Send a link to a credential to someone by email."""
+    The upper bound is ``MAX_SHARE_RECIPIENTS``, checked by the service;
+    the limit here only bounds the request size.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
-    recipient_email: EmailStr
-    note: str | None = Field(default=None, max_length=500)
+    holder_email: list[EmailStr] = Field(min_length=1, max_length=50)

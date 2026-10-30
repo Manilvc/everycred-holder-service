@@ -129,7 +129,7 @@ async def test_unsafe_path_values_are_rejected_before_forwarding(
     assert connector.requests == []
 
 
-async def test_connector_validation_error_code_is_passed_through(
+async def test_connector_validation_message_is_passed_through(
     client: AsyncClient,
     holder: RegisteredHolder,
     connector: FakeConnector,
@@ -151,7 +151,11 @@ async def test_connector_validation_error_code_is_passed_through(
     )
 
     assert response.status_code == 400
-    assert response.json()["error"]["code"] == "source_required"
+    assert response.json() == {
+        "status": "fail",
+        "data": None,
+        "message": "A source is required.",
+    }
 
 
 async def test_gateway_requires_authentication(client: AsyncClient) -> None:

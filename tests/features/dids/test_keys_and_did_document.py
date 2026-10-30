@@ -114,7 +114,9 @@ async def test_key_limit_is_enforced(
     response = await register_key(client, holder, ed25519_jwk())
 
     assert response.status_code == 409
-    assert response.json()["error"]["code"] == "key_limit_reached"
+    assert response.json()["message"] == (
+        "Revoke an existing key before registering another."
+    )
 
 
 async def test_unknown_did_is_not_found(client: AsyncClient) -> None:

@@ -8,18 +8,27 @@ OTP codes and password reset tokens are short-lived, so a fast keyed
 HMAC is enough for them; the server-side key means a leaked database
 alone cannot be used to confirm a code.
 
-Tokens are signed JWTs with a ``typ`` claim, so a registration token
-can never be used as an access token or the other way round. Access
-tokens also carry ``sid``, the holder session they belong to; route
-dependencies check that the session is still active on every request.
+Access tokens are signed JWTs with a ``typ`` claim and ``sid``, the
+holder session they belong to; route dependencies check that the
+session is still active on every request. The wallet app treats the
+token as opaque.
+
+Recovery tokens, returned by login for a recently deleted account, are
+not JWTs: they are a base64url payload plus an HMAC, valid for
+``RECOVERY_TOKEN_TTL_SECONDS``, so they can never be used as an access
+token.
 """
 
+import base64
+import binascii
 import hashlib
 import hmac
+import json
 import secrets
+import time
 import uuid
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from enum import StrEnum
 from functools import lru_cache
 from typing import Any
@@ -44,7 +53,22 @@ class TokenType(StrEnum):
     """What a signed token may be used for."""
 
     ACCESS = "access"
-    REGISTRATION = "registration"
+    EMAIL_VERIFICATION = "email_verification"
+
+
+RECOVERY_TOKEN_TYPE = "holder_recovery"  # noqa: S105 - a label
+
+
+class RecoveryTokenError(Exception):
+    """Raised when a recovery token cannot be used.
+
+    Attributes:
+        is_expired: True when the token was genuine but too old.
+    """
+
+    def __init__(self, is_expired: bool = False) -> None:
+        super().__init__("recovery token rejected")
+        self.is_expired = is_expired
 
 
 @dataclass(frozen=True, slots=True)
@@ -74,7 +98,7 @@ class TokenClaims:
     """Verified contents of a token.
 
     Attributes:
-        subject: Holder id for access tokens, email for registration.
+        subject: Holder id the token was issued to.
         session_id: Holder session id; only set on access tokens.
     """
 
@@ -178,12 +202,13 @@ def create_access_token(
     return SignedToken(token=_encode(claims, settings), expires_at=expires_at)
 
 
-def create_registration_token(email: str, settings: Settings) -> SignedToken:
-    """Sign a short-lived proof that ``email`` passed OTP verification."""
-    expires_at = utc_now() + timedelta(
-        minutes=settings.registration_token_minutes
+def create_email_verification_token(
+    holder_id: uuid.UUID, expires_at: datetime, settings: Settings
+) -> SignedToken:
+    """Sign a token that proves the holder opened a verification email."""
+    claims = _base_claims(
+        str(holder_id), TokenType.EMAIL_VERIFICATION, expires_at, settings
     )
-    claims = _base_claims(email, TokenType.REGISTRATION, expires_at, settings)
     return SignedToken(token=_encode(claims, settings), expires_at=expires_at)
 
 
@@ -209,15 +234,67 @@ def decode_token(
             options={"require": _REQUIRED_CLAIMS},
         )
     except jwt.InvalidTokenError as exc:
-        raise AuthenticationError("Invalid or expired token.") from exc
+        raise AuthenticationError("Invalid token") from exc
 
     if claims["typ"] != expected_type.value:
-        raise AuthenticationError("Invalid or expired token.")
+        raise AuthenticationError("Invalid token")
     session_id = claims.get("sid")
     if expected_type is TokenType.ACCESS and not session_id:
-        raise AuthenticationError("Invalid or expired token.")
+        raise AuthenticationError("Invalid token")
     return TokenClaims(
         subject=claims["sub"],
         session_id=session_id,
         expires_at=datetime.fromtimestamp(claims["exp"], tz=UTC),
     )
+
+
+def _sign_recovery_payload(payload: bytes, settings: Settings) -> str:
+    # The type label keeps this HMAC distinct from OTP and reset hashes
+    # made with the same secret.
+    return hmac.new(
+        settings.token_hash_secret.get_secret_value().encode(),
+        f"{RECOVERY_TOKEN_TYPE}.".encode() + payload,
+        hashlib.sha256,
+    ).hexdigest()
+
+
+def create_recovery_token(holder_id: uuid.UUID, settings: Settings) -> str:
+    """Return a short-lived token that lets a deleted account be restored."""
+    payload = base64.urlsafe_b64encode(
+        json.dumps(
+            {
+                "holder_id": str(holder_id),
+                "type": RECOVERY_TOKEN_TYPE,
+                "exp": int(time.time()) + settings.recovery_token_ttl_seconds,
+            },
+            separators=(",", ":"),
+        ).encode()
+    )
+    return f"{payload.decode()}.{_sign_recovery_payload(payload, settings)}"
+
+
+def read_recovery_token(token: str, settings: Settings) -> uuid.UUID:
+    """Verify a recovery token and return the holder id it names.
+
+    Raises:
+        RecoveryTokenError: The token is malformed, forged, of another
+            type, or expired (``is_expired`` is then True).
+    """
+    try:
+        encoded_payload, signature = token.rsplit(".", 1)
+    except ValueError as exc:
+        raise RecoveryTokenError() from exc
+    expected = _sign_recovery_payload(encoded_payload.encode(), settings)
+    if not hmac.compare_digest(expected, signature):
+        raise RecoveryTokenError()
+    try:
+        claims = json.loads(base64.urlsafe_b64decode(encoded_payload))
+        holder_id = uuid.UUID(claims["holder_id"])
+        expires_at = int(claims["exp"])
+    except (binascii.Error, ValueError, KeyError, TypeError) as exc:
+        raise RecoveryTokenError() from exc
+    if claims.get("type") != RECOVERY_TOKEN_TYPE:
+        raise RecoveryTokenError()
+    if expires_at < time.time():
+        raise RecoveryTokenError(is_expired=True)
+    return holder_id

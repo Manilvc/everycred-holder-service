@@ -13,7 +13,10 @@ URLs are produced when a response needs one.
 ### `ObjectStorage` (protocol)
 
 - `await put(key, content, content_type)` — store or replace an object.
-- `await url_for(key) -> str` — a URL the wallet can fetch.
+- `await url_for(key, ttl_seconds=None) -> str` — a URL the wallet can
+  fetch. `ttl_seconds` overrides `STORAGE_URL_TTL_SECONDS` for S3
+  presigned URLs (used for shared presentations); local URLs never
+  expire.
 
 ### `Storage`
 

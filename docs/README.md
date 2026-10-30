@@ -1,6 +1,6 @@
 # Holder Service Documentation
 
-> Last updated: 2026-10-21
+> Last updated: 2026-10-28
 
 ## Where this service sits
 
@@ -23,6 +23,13 @@ device keys, push tokens, inbox, audit trail, and stored presentations.
 Credentials and requests stay in the DCS that issued them and are read
 through the connector; nothing about them is stored here.
 
+The routes the wallet app calls keep the DCS backend's exact paths,
+bodies, status codes, messages and response envelope, so the app only
+changes its base URL: see [wallet_compatibility.md](wallet_compatibility.md).
+For every app flow end to end (sign-up, credentials, requests,
+notifications, presentations), see
+[holder_app_integration.md](holder_app_integration.md).
+
 ## Layout
 
 ```
@@ -38,6 +45,7 @@ app/
 │   ├── logging.py       # JSON / text logging with request id
 │   ├── middleware.py    # RequestContextMiddleware
 │   ├── exceptions.py    # AppError hierarchy and handlers
+│   ├── responses.py     # DCS envelope {status, data, message}
 │   ├── database.py      # Async engine, sessions, ORM Base, DbSession
 │   ├── models.py        # UTCDateTime, UUID and timestamp mixins
 │   ├── db_check.py      # Pre-migration database check
@@ -48,18 +56,19 @@ app/
 │   ├── email.py         # SMTP / console email
 │   └── connector.py     # ConnectorClient and its response models
 ├── shared/
-│   ├── schemas.py       # ErrorResponse, Page[ItemT]
+│   ├── schemas.py       # DcsResponse, ErrorResponse, Page[ItemT]
 │   ├── pagination.py    # Pagination query model
-│   ├── uploads.py       # Size-limited reads, image type detection
+│   ├── uploads.py       # Size-limited body reads, image type detection
 │   └── identifiers.py   # Safe path params for DCS ids
 └── features/
     ├── health/          # Liveness and readiness probes
-    ├── auth/            # OTP, register, login, sessions, passwords
-    ├── holders/         # holders table, profile, profile image
+    ├── auth/            # OTP, register, login, recovery, passwords
+    ├── holders/         # holders table, GET /holder, /holder/update
     ├── dids/            # DID provisioning, device keys, DID documents
     ├── devices/         # FCM push tokens
     ├── notifications/   # Inbox, connector events, outbox delivery
-    ├── credentials/     # Credentials via the connector
+    ├── onboarding/      # Issuer invites, registration reports to DCS
+    ├── credentials/     # Credentials via the connector, credential_refs
     ├── gateway/         # Requests, workflow, KYC, DigiLocker via connector
     ├── wallet_storage/  # Presentation uploads
     └── audit/           # Holder audit trail
@@ -88,7 +97,7 @@ sequenceDiagram
 
 [config](core/config.md) · [context](core/context.md) ·
 [logging](core/logging.md) · [middleware](core/middleware.md) ·
-[exceptions](core/exceptions.md) · [database](core/database.md) ·
+[exceptions and responses](core/exceptions.md) · [database](core/database.md) ·
 [models](core/models.md) · [db_check](core/db_check.md) ·
 [http_client](core/http_client.md) · [security](core/security.md) ·
 [signatures](core/signatures.md) · [storage](core/storage.md) ·
@@ -100,6 +109,7 @@ sequenceDiagram
 [holders](features/holders.md) · [dids](features/dids.md) ·
 [devices](features/devices.md) ·
 [notifications](features/notifications.md) ·
+[onboarding](features/onboarding.md) ·
 [credentials](features/credentials.md) · [gateway](features/gateway.md) ·
 [wallet_storage](features/wallet_storage.md) · [audit](features/audit.md)
 

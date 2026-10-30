@@ -34,6 +34,17 @@ Read `docs/README.md` before adding code. In short:
 - Shared resources are provided through lifespan state
   (`request.state`), not module globals.
 
+## Wallet app compatibility
+
+- The wallet app calls this service exactly as it called the DCS. Do
+  not change the path, method, body, status code, message, or response
+  shape of any route in `docs/wallet_compatibility.md` without a
+  matching wallet app release.
+- Respond with `respond()` from `app/core/responses.py`; errors go
+  through `AppError` subclasses, whose messages the app shows to users.
+- The app refers to holders and credentials by integer ids:
+  `holders.numeric_id` and `credential_refs.numeric_id`.
+
 ## Data ownership
 
 - This service owns holder identity only. Never store credential
@@ -59,6 +70,7 @@ Read `docs/README.md` before adding code. In short:
 
 - Never log emails, names, tokens, OTP codes, or credential content; log
   ids.
-- Login, OTP, and reset responses must not reveal whether an email is
-  registered.
+- Forgot password must not reveal whether an email is registered. OTP
+  send and login keep the DCS messages, which do; the app relies on
+  them.
 - Never accept private key material; `PublicJwk` rejects it.
