@@ -79,6 +79,27 @@ REQUEST_NOTIFICATION_TYPES = tuple(
 )
 
 
+# ``data.category`` of a push, as the DCS sends it (PushCategory in the DCS
+# holder notification registry): requests are "issuer", credentials
+# "credential", anything else "general".
+PUSH_CATEGORY_GENERAL = "general"
+_PUSH_CATEGORY_BY_TYPE = {
+    **{
+        notification_type: "issuer"
+        for notification_type in REQUEST_NOTIFICATION_TYPES
+    },
+    **{
+        spec.notification_type: "credential"
+        for spec in _CREDENTIAL_SPECS.values()
+    },
+}
+
+
+def push_category(notification_type: str) -> str:
+    """Return the push ``category`` the wallet app groups a type under."""
+    return _PUSH_CATEGORY_BY_TYPE.get(notification_type, PUSH_CATEGORY_GENERAL)
+
+
 def _spec_for(payload: ConnectorEventPayload) -> _MessageSpec:
     if payload.event in _CREDENTIAL_SPECS:
         return _CREDENTIAL_SPECS[payload.event]

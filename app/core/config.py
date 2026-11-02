@@ -185,6 +185,8 @@ class Settings(BaseSettings):
     socket_event: str = "new_request"
     fcm_project_id: str | None = None
     fcm_service_account_json: SecretStr | None = None
+    # Android notification channel the app creates (the DCS default).
+    fcm_android_channel_id: str = Field(default="default", min_length=1)
     notification_redirect_base_url: str = "everycredwallet://"
     notification_max_attempts: int = Field(default=8, ge=1, le=20)
 

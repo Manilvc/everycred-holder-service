@@ -97,6 +97,25 @@ The socket message is the shape DCS publishes, so the existing Socket
 service needs no change:
 `{"event": "new_request", "data": <inbox payload>, "user_uuid": "<holder id>", "room": "user_<holder id>"}`.
 
+The push is the one the DCS sent (`build_inbox_push_message` and
+`fcm_client.build_fcm_message` there), so the wallet app's existing push
+handling works unchanged (`to_push_data`, `FcmPushSender` in
+`channels.py`):
+
+- `notification` `{title, body}` from the inbox row; Android priority
+  high with `notification.channel_id` = `FCM_ANDROID_CHANNEL_ID`; APNs
+  priority 10, alert, default sound.
+- `data` (all strings): `uuid`, `notification_type`, `redirect_module`,
+  `redirect_path`, `redirect_entity_type`, `redirect_entity_id`; every
+  scalar value of `extra_metadata` at the top level (`request_id`,
+  `credential_id`, `source_code`); `type` = the notification type; and
+  `category`: `issuer` for request types, `credential` for credential
+  types, `general` otherwise. FCM-reserved keys (`from`, `notification`,
+  `message_type`, `google*`, `gcm*`) and empty values are dropped.
+
+A request push therefore carries `data.type = new_credential_request` and
+`data.request_id`, which the app uses to open `request/<request_id>`.
+
 Retries: socket publish failures and retryable FCM errors (429, 5xx,
 network) wait 30 s, 2 min, 10 min, 30 min, then hourly, up to
 `NOTIFICATION_MAX_ATTEMPTS`. A channel that is not configured, or a
@@ -119,7 +138,8 @@ holder with no active device, marks the row `skipped`.
 | `SOCKET_REDIS_URL` | unset (socket off) | Redis of the Socket service, with DB index, e.g. `redis://:<password>@redis:6379/2` |
 | `SOCKET_CHANNEL` | `socketio_notifications` | Channel the Socket service subscribes to |
 | `SOCKET_EVENT` | `new_request` | Socket.IO event the wallet listens for |
-| `FCM_PROJECT_ID`, `FCM_SERVICE_ACCOUNT_JSON` | unset (push off) | Firebase project and service account JSON |
+| `FCM_PROJECT_ID`, `FCM_SERVICE_ACCOUNT_JSON` | unset (push off) | Firebase project and service account JSON (the same project the app and the DCS used) |
+| `FCM_ANDROID_CHANNEL_ID` | `default` | Android notification channel; same default as the DCS |
 | `NOTIFICATION_REDIRECT_BASE_URL` | `everycredwallet://` | Deep link base |
 | `NOTIFICATION_MAX_ATTEMPTS` | `8` | Attempts per delivery |
 | `WORKER_INTERVAL_SECONDS` | `5` | Worker loop interval |

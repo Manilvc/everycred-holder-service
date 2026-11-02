@@ -28,6 +28,7 @@ from google.oauth2 import service_account
 from starlette.concurrency import run_in_threadpool
 
 from app.core.config import Settings
+from app.features.notifications.messages import push_category
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +36,19 @@ FCM_SCOPE = "https://www.googleapis.com/auth/firebase.messaging"
 FCM_SEND_URL = (
     "https://fcm.googleapis.com/v1/projects/{project_id}/messages:send"
 )
+# Push ``data`` keys copied from the inbox payload, as the DCS sends them
+# (push_notification_service.build_inbox_push_message).
+PUSH_DATA_KEYS = (
+    "uuid",
+    "notification_type",
+    "redirect_module",
+    "redirect_path",
+    "redirect_entity_type",
+    "redirect_entity_id",
+)
+# FCM rejects the whole message for these data keys and key prefixes.
+FCM_RESERVED_DATA_KEYS = frozenset({"from", "notification", "message_type"})
+FCM_RESERVED_DATA_KEY_PREFIXES = ("google", "gcm")
 # FCM error codes meaning the token will never work again.
 _DEAD_TOKEN_ERRORS = frozenset({"UNREGISTERED", "SENDER_ID_MISMATCH"})
 _RETRYABLE_STATUSES = frozenset({429, 500, 502, 503, 504})
@@ -115,9 +129,11 @@ class FcmPushSender:
         http_client: httpx.AsyncClient,
         project_id: str,
         service_account_info: dict[str, Any],
+        android_channel_id: str,
     ) -> None:
         self.http_client = http_client
         self.project_id = project_id
+        self.android_channel_id = android_channel_id
         self._credentials = (
             service_account.Credentials.from_service_account_info(
                 service_account_info, scopes=[FCM_SCOPE]
@@ -132,7 +148,10 @@ class FcmPushSender:
                 "token": token,
                 "notification": {"title": message.title, "body": message.body},
                 "data": message.data,
-                "android": {"priority": "high"},
+                "android": {
+                    "priority": "high",
+                    "notification": {"channel_id": self.android_channel_id},
+                },
                 "apns": {
                     "headers": {
                         "apns-priority": "10",
@@ -204,19 +223,49 @@ def create_push_sender(
     if not (settings.fcm_project_id and settings.fcm_service_account_json):
         return None
     info = json.loads(settings.fcm_service_account_json.get_secret_value())
-    return FcmPushSender(http_client, settings.fcm_project_id, info)
+    return FcmPushSender(
+        http_client,
+        settings.fcm_project_id,
+        info,
+        settings.fcm_android_channel_id,
+    )
 
 
 def to_push_data(payload: dict[str, Any]) -> dict[str, str]:
-    """Flatten a wallet payload into FCM data, whose values must be strings.
+    """Return the FCM ``data`` for a wallet payload, as the DCS sends it.
 
-    Nested values (``extra_metadata``) are JSON-encoded and ``None``
-    values dropped, as FCM rejects them.
+    The wallet app opens a push from these keys, so they match the DCS
+    push exactly: the inbox fields in ``PUSH_DATA_KEYS``, every scalar
+    value of ``extra_metadata`` at the top level (``request_id``,
+    ``credential_id``, ``source_code``), ``type`` (the notification type)
+    and ``category``. FCM-reserved keys and ``None`` values are dropped,
+    and every value is a string, as FCM requires.
     """
-    data: dict[str, str] = {}
-    for key, value in payload.items():
-        if value is None:
-            continue
-        data[key] = value if isinstance(value, str) else json.dumps(value)
-    data["type"] = str(payload.get("notification_type", "inbox_notification"))
-    return data
+    data: dict[str, Any] = {}
+    metadata = payload.get("extra_metadata")
+    if isinstance(metadata, dict):
+        data.update(
+            (str(key), value)
+            for key, value in metadata.items()
+            if isinstance(value, str | int | float | bool)
+            and not _is_reserved_data_key(str(key))
+        )
+    # Inbox fields win over metadata keys of the same name.
+    data.update((key, payload.get(key)) for key in PUSH_DATA_KEYS)
+    notification_type = str(
+        payload.get("notification_type") or "inbox_notification"
+    )
+    data["type"] = notification_type
+    data["category"] = push_category(notification_type)
+    return {
+        key: value if isinstance(value, str) else str(value)
+        for key, value in data.items()
+        if value is not None
+    }
+
+
+def _is_reserved_data_key(key: str) -> bool:
+    lowered = key.lower()
+    return lowered in FCM_RESERVED_DATA_KEYS or lowered.startswith(
+        FCM_RESERVED_DATA_KEY_PREFIXES
+    )
