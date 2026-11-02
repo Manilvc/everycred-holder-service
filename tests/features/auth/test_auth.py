@@ -126,7 +126,7 @@ async def test_register_rejects_mismatched_passwords(
     )
 
 
-async def test_register_returns_201_with_null_data(
+async def test_register_signs_the_holder_in(
     client: AsyncClient, mailer: RecordingMailer
 ) -> None:
     await verify_email(client, mailer, "fresh@example.com")
@@ -135,12 +135,37 @@ async def test_register_returns_201_with_null_data(
         "/v1/holder/register", json=_register_body("fresh@example.com")
     )
 
+    body = response.json()
     assert response.status_code == 201
-    assert response.json() == {
-        "status": "success",
-        "data": None,
-        "message": "Holder created successfully!",
-    }
+    assert body["status"] == "success"
+    assert body["message"] == "Holder created successfully!"
+    # Same data as the DCS sign-up.
+    assert set(body["data"]) == {"user_type", "token"}
+    assert body["data"]["user_type"] == "holder"
+    profile = await client.get(
+        "/v1/holder",
+        headers={"Authorization": f"Bearer {body['data']['token']}"},
+    )
+    assert profile.status_code == 200
+    assert profile.json()["data"]["email"] == "fresh@example.com"
+
+
+async def test_otp_email_is_sent_as_html_with_a_text_part(
+    client: AsyncClient, mailer: RecordingMailer
+) -> None:
+    await client.post(
+        "/v1/wallet/holder/otp/send",
+        json={"email": "html@example.com", "otp_type": "email"},
+    )
+
+    email = mailer.sent[-1]
+    code = mailer.last_code()
+    assert email.subject == "Verify your email with EveryCRED"
+    assert code in email.body
+    assert email.html is not None
+    assert code in email.html
+    assert "Verify your email" in email.html
+    assert "minutes</strong>" in email.html
 
 
 async def test_one_verification_registers_one_account(

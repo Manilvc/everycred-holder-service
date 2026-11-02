@@ -25,7 +25,7 @@ works unchanged; see [wallet_compatibility.md](../wallet_compatibility.md).
 | POST | `/v1/holder/password/change` | Change password | bearer |
 | DELETE | `/v1/holder` | Delete my account | bearer |
 | POST | `/v1/holder/logout` | End this device's session and its push tokens | bearer |
-| POST | `/v1/holder/login/otp` | Sign in right after registering | OTP login token |
+| POST | `/v1/holder/login/otp` | Sign in right after registering (older app versions; `register` now signs in itself) | OTP login token |
 | POST | `/v1/holder/login/sso?token=&sso_type=gmail` | Sign in an existing account with a Google ID token | Google ID token |
 | POST | `/v1/holder/email/confirmation` | Email a verification link (always 200) | none |
 | PUT | `/v1/holder/email/verify?verify_token=` | Accept a verification link | link token |
@@ -88,10 +88,20 @@ Request `{"email", "otp_code", "otp_type": "email"}`. Response `200`
 ### `POST /v1/holder/register`
 
 Request `{"name", "email", "password", "confirm_password", "contact"?}`.
-Passwords match `^[A-Za-z\d!@#$%^&*]{8,}$`. Response `201` with
-`data: null` and "Holder created successfully!". 400 for mismatched
-passwords, an existing account ("Account already exists!"), or an email
-not verified in the last `REGISTRATION_TOKEN_MINUTES`.
+Passwords match `^[A-Za-z\d!@#$%^&*]{8,}$`. The new holder is signed
+in straight away; the response is the same as the DCS sign-up:
+
+```json
+{
+  "status": "success",
+  "data": { "user_type": "holder", "token": "<access token>" },
+  "message": "Holder created successfully!"
+}
+```
+
+400 for mismatched passwords, an existing account ("Account already
+exists!"), or an email not verified in the last
+`REGISTRATION_TOKEN_MINUTES`.
 
 In the same transaction, issuer invites waiting for the email move to
 the inbox and a report of the new account is queued for every linked
@@ -119,7 +129,10 @@ Response `200`, the same as `/v1/holder/login`:
 
 The token works once, only after `/v1/holder/register` has used the
 verification that issued it, and only within
-`REGISTRATION_TOKEN_MINUTES` of that verification.
+`REGISTRATION_TOKEN_MINUTES` of that verification. Registering now opens
+the session itself and spends the token, so after a successful
+`register` this endpoint answers "Automatic sign-in is no longer
+available": one verification yields one session.
 
 | Status | `message` | When |
 |--------|-----------|------|
@@ -151,9 +164,7 @@ sequenceDiagram
     API-->>Wallet: login_token
     Wallet->>API: POST /holder/register
     API->>Service: register (needs a recent, unused verification)
-    Service->>Service: provision DID, create holder
-    Wallet->>API: POST /holder/login/otp {login_token}
-    API->>Service: login_with_otp_token (opens a session)
+    Service->>Service: provision DID, create holder, open a session
     API-->>Wallet: token
 ```
 

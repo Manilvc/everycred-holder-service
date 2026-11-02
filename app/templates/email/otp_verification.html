@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="format-detection" content="telephone=no, date=no, address=no, email=no" />
+    <title>Verify your email</title>
+</head>
+
+<body style="margin:0;padding:0;background-color:#f5f6f7;">
+
+    <table width="100%" role="presentation" bgcolor="#f5f6f7" style="border-collapse:collapse;">
+        <tr>
+            <td align="center" style="padding:40px 0;">
+
+                <table width="640" bgcolor="#ffffff" role="presentation"
+                    style="max-width:640px;border-radius:12px;box-shadow:0 2px 8px rgba(0,0,0,0.05);border-collapse:collapse;">
+
+                    {% if logo_url %}
+                    <tr>
+                        <td align="center" style="padding:40px 0 32px;">
+                            <img src="{{ logo_url }}" width="200" height="auto" alt="EveryCRED"
+                                style="display:block;border:0;outline:none;max-width:200px;height:auto;margin:0 auto;" />
+                        </td>
+                    </tr>
+                    {% endif %}
+
+                    <tr>
+                        <td style="padding:{% if logo_url %}0{% else %}40px{% endif %} 40px 40px;text-align:left;">
+
+                            <p style="font-family:Arial;font-size:24px;font-weight:600;color:#1a1a1a;text-align:center;margin:0 0 32px;">
+                                {{ heading }}
+                            </p>
+
+                            <p style="font-family:Arial;font-size:16px;color:#555;line-height:24px;margin:0 0 24px;">
+                                Hello,
+                            </p>
+
+                            <p style="font-family:Arial;font-size:16px;color:#555;line-height:24px;margin:0 0 24px;">
+                                {{ intro }}
+                            </p>
+
+                            <table width="100%" role="presentation" style="border-collapse:collapse;margin:0 0 24px;">
+                                <tr>
+                                    <td align="center" bgcolor="#f8f9fa"
+                                        style="padding:16px;border-radius:6px;font-family:Arial;font-size:28px;font-weight:700;letter-spacing:6px;color:#1E4383;">
+                                        {{ otp_code }}
+                                    </td>
+                                </tr>
+                            </table>
+
+                            <p style="font-family:Arial;font-size:16px;color:#555;line-height:24px;margin:0 0 24px;">
+                                This code will expire in <strong>{{ expiry_minutes }} minutes</strong>.
+                            </p>
+
+                            <p style="font-family:Arial;font-size:16px;color:#555;line-height:24px;margin:0 0 24px;">
+                                Do not share it with anyone. <strong>EveryCRED</strong> will never ask you for this
+                                code.
+                            </p>
+
+                            <p style="font-family:Arial;font-size:16px;color:#555;line-height:24px;margin:0 0 24px;">
+                                If you didn't request this, you can safely ignore this email.
+                            </p>
+
+                            {% if support_email %}
+                            <p style="font-family:Arial;font-size:16px;color:#555;line-height:24px;margin:0 0 24px;">
+                                Need help? Contact us at
+                                <a href="mailto:{{ support_email }}"
+                                    style="color:#1E4383;text-decoration:none;">{{ support_email }}</a>
+                            </p>
+                            {% endif %}
+
+                            <p style="font-family:Arial;font-size:16px;color:#555;line-height:24px;margin:0;">
+                                Thank you,<br>
+                                <strong>EveryCRED Team.</strong>
+                            </p>
+
+                        </td>
+                    </tr>
+                </table>
+
+                <table width="640" bgcolor="#f8f9fa" role="presentation"
+                    style="margin:16px auto 0;border-collapse:collapse;max-width:640px;">
+                    <tr>
+                        <td align="center" style="padding:20px 24px;">
+                            <p style="font-family:Arial;font-size:14px;line-height:20px;color:#666666;margin:0 0 8px;">
+                                &copy; {{ year }} EveryCRED. All rights reserved.<br>
+                                1900 Reston Metro Plaza, 6th floor, Reston, 20190
+                            </p>
+                            <p style="margin:0;font-family:Arial;font-size:14px;line-height:20px;">
+                                <a href="https://everycred.com/privacy-policy/"
+                                    style="color:#1E4383;font-size:14px;text-decoration:none;">Privacy Policy</a><span
+                                    style="color:#666666;"> | </span><a href="https://everycred.com/terms-of-service/"
+                                    style="color:#1E4383;font-size:14px;text-decoration:none;">Terms of Service</a>
+                            </p>
+                        </td>
+                    </tr>
+                </table>
+
+            </td>
+        </tr>
+    </table>
+
+</body>
+
+</html>

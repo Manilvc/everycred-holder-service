@@ -9,7 +9,14 @@ and credential links shared by holders.
 
 ## Public API
 
-- `OutgoingEmail(recipient, subject, body)` — a plain-text message.
+- `OutgoingEmail(recipient, subject, body, html=None)` — `body` is the
+  plain-text part, always sent; `html`, when set, is added as the HTML
+  alternative.
+- `render_email(template_name, **context)` (`app/core/email_templates.py`)
+  — renders a template from `app/templates/email` with autoescaping and
+  `StrictUndefined`, adding `year` for the footer. The templates follow
+  the EveryCRED DCS email layout; `otp_verification.html` is the sign-up
+  verification code email.
 - `EmailSender` (protocol) — `await send(email)`; raises
   `EmailDeliveryError` on failure.
 - `SmtpEmailSender` — SMTP relay with STARTTLS and login.
@@ -40,6 +47,8 @@ await mailer.send(
 |---------|---------|--------|
 | `EMAIL_BACKEND` | `console` | `smtp` is required in production |
 | `EMAIL_FROM` | `no-reply@example.com` | Sender address |
+| `EMAIL_LOGO_URL` | — | Public PNG logo at the top of HTML emails; left out when unset |
+| `EMAIL_SUPPORT_ADDRESS` | — | "Need help?" address in HTML emails; left out when unset |
 | `SMTP_HOST`, `SMTP_PORT` | —, `587` | Relay |
 | `SMTP_USERNAME`, `SMTP_PASSWORD` | — | Login (optional) |
 | `SMTP_USE_STARTTLS` | `true` | Upgrade to TLS |

@@ -7,10 +7,11 @@ messages, so the app behaves the same against this service:
   and ``register`` creates the account. Unlike the DCS, ``register``
   requires a verification of that email within
   ``REGISTRATION_TOKEN_MINUTES``; the app always verifies first.
-* ``otp/verify`` also returns a single-use login token. Once
-  ``register`` has used that verification, ``login/otp`` exchanges the
-  token for a session, so the app signs in without asking for the
-  password again.
+* ``register`` signs the new holder in: like the DCS sign-up, it answers
+  with ``{"user_type": "holder", "token": ...}``. ``otp/verify`` still
+  returns a single-use login token for app versions that call
+  ``login/otp`` after registering; it no longer works once ``register``
+  has opened the session, so one verification yields one session.
 * Registration also claims the issuer invites that were waiting for the
   email and queues a report of the new account to every linked DCS
   (see ``app.features.onboarding``).
@@ -29,6 +30,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings
 from app.core.email import EmailDeliveryError, EmailSender, OutgoingEmail
+from app.core.email_templates import render_email
 from app.core.exceptions import (
     AuthenticationError,
     ExternalServiceError,
@@ -214,16 +216,7 @@ class AuthService:
         )
         self.auth.add(otp)
         await self.session.commit()
-        await self._send(
-            OutgoingEmail(
-                recipient=email,
-                subject="Your EveryCRED verification code",
-                body=(
-                    f"Your verification code is {code}. It expires in "
-                    f"{self.settings.otp_ttl_minutes} minutes."
-                ),
-            )
-        )
+        await self._send(self._otp_email(email, code))
         return AuthResult({"otp_uuid": str(otp.id)}, "OTP sent successfully")
 
     async def verify_otp(self, payload: VerifyOtpRequest) -> AuthResult:
@@ -274,11 +267,15 @@ class AuthService:
             "OTP verified successfully",
         )
 
-    async def register(self, payload: RegisterRequest) -> None:
-        """Create the holder and their DID after OTP verification.
+    async def register(self, payload: RegisterRequest) -> AuthResult:
+        """Create the holder and their DID, and sign them in.
 
         A holder whose account was deleted longer ago than the grace
         period is replaced, so the email can be registered again.
+
+        Returns:
+            The same ``data`` as the DCS sign-up: ``user_type`` and the
+            session ``token``.
 
         Raises:
             RegistrationError: Passwords differ, the email has an
@@ -310,15 +307,25 @@ class AuthService:
             logger.info(
                 "Replacing holder %s past its grace period", existing.id
             )
-        otp.used_at = utc_now()
+        now = utc_now()
+        otp.used_at = now
+        # This verification now opens its session here, so its login
+        # token must not open a second one through ``login/otp``.
+        otp.signed_in_at = now
         holder = await self._create_holder(email, payload)
         self.audit.record(holder.id, AuditAction.REGISTERED)
         invite_count = await self.onboarding.claim_invites(holder)
+        token = self._open_session(holder)
+        self.audit.record(holder.id, AuditAction.LOGIN_SUCCEEDED)
         await self.session.commit()
         logger.info(
-            "Holder %s registered with %d pending invite(s)",
+            "Holder %s registered and signed in with %d pending invite(s)",
             holder.id,
             invite_count,
+        )
+        return AuthResult(
+            {"user_type": USER_TYPE_HOLDER, "token": token},
+            "Holder created successfully!",
         )
 
     async def login(self, payload: LoginRequest) -> AuthResult:
@@ -783,6 +790,30 @@ class AuthService:
         return InvalidOtpError(
             "Maximum attempts reached. Please try again with new OTP.",
             data={"remaining_attempts": 0, "max_attempts": max_attempts},
+        )
+
+    def _otp_email(self, email: str, code: str) -> OutgoingEmail:
+        """Build the sign-up verification email: HTML plus a text part."""
+        minutes = self.settings.otp_ttl_minutes
+        return OutgoingEmail(
+            recipient=email,
+            subject="Verify your email with EveryCRED",
+            body=(
+                f"Your EveryCRED verification code is {code}. It expires in "
+                f"{minutes} minutes. Do not share it with anyone."
+            ),
+            html=render_email(
+                "otp_verification.html",
+                heading="Verify your email",
+                intro=(
+                    "Use the code below to verify your email address and "
+                    "finish creating your EveryCRED Wallet."
+                ),
+                otp_code=code,
+                expiry_minutes=minutes,
+                logo_url=self.settings.email_logo_url,
+                support_email=self.settings.email_support_address,
+            ),
         )
 
     async def _send(self, message: OutgoingEmail) -> None:

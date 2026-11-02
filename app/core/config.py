@@ -165,6 +165,11 @@ class Settings(BaseSettings):
 
     email_backend: EmailBackend = EmailBackend.CONSOLE
     email_from: EmailStr = "no-reply@example.com"
+    # Public PNG logo shown at the top of HTML emails (email clients do not
+    # render SVG reliably); left out when unset. Support address for the
+    # "Need help?" line; left out when unset.
+    email_logo_url: str | None = None
+    email_support_address: EmailStr | None = None
     smtp_host: str | None = None
     smtp_port: int = Field(default=587, ge=1, le=65535)
     smtp_username: str | None = None

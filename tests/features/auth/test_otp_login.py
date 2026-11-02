@@ -70,24 +70,18 @@ async def test_verify_keeps_dcs_fields_and_adds_login_token(
     assert len(body["data"]["login_token"]) >= 43
 
 
-async def test_login_token_signs_in_after_registration(
+async def test_registration_spends_the_login_token(
     client: AsyncClient, mailer: RecordingMailer
 ) -> None:
+    # register already opens the session, so the verification's login
+    # token cannot open a second one.
     login_token = await _verify(client, mailer, "direct@example.com")
     await _register(client, "direct@example.com")
 
     response = await client.post(OTP_LOGIN, json={"login_token": login_token})
 
-    body = response.json()
-    assert response.status_code == 200
-    assert body["message"] == "logged in successfully"
-    assert body["data"]["user_type"] == "holder"
-    assert body["data"]["is_deleted"] is False
-    profile = await client.get(
-        "/v1/holder",
-        headers={"Authorization": f"Bearer {body['data']['token']}"},
-    )
-    assert profile.json()["data"]["email"] == "direct@example.com"
+    assert response.status_code == 400
+    assert response.json()["message"] == INVALID_MESSAGE
 
 
 async def test_login_token_works_once(
@@ -109,14 +103,11 @@ async def test_login_token_needs_registration_first(
     login_token = await _verify(client, mailer, "early@example.com")
 
     early = await client.post(OTP_LOGIN, json={"login_token": login_token})
-    await _register(client, "early@example.com")
-    after = await client.post(OTP_LOGIN, json={"login_token": login_token})
 
     assert early.status_code == 400
     assert early.json()["message"] == (
         "Please complete registration before signing in."
     )
-    assert after.status_code == 200
 
 
 async def test_login_token_expires_with_the_registration_window(

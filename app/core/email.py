@@ -29,11 +29,16 @@ class EmailDeliveryError(Exception):
 
 @dataclass(frozen=True, slots=True)
 class OutgoingEmail:
-    """A plain-text email ready to send."""
+    """An email ready to send.
+
+    ``body`` is the plain-text part and is always sent. ``html``, when
+    given, is added as the HTML alternative mail clients show instead.
+    """
 
     recipient: str
     subject: str
     body: str
+    html: str | None = None
 
 
 class EmailSender(Protocol):
@@ -73,6 +78,8 @@ class SmtpEmailSender:
         message["To"] = email.recipient
         message["Subject"] = email.subject
         message.set_content(email.body)
+        if email.html:
+            message.add_alternative(email.html, subtype="html")
         try:
             await run_in_threadpool(self._send_message, message)
         except (smtplib.SMTPException, OSError) as exc:

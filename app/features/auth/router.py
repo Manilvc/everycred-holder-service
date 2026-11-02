@@ -196,9 +196,13 @@ async def recover_holder(
 async def register_holder(
     payload: RegisterRequest, service: AuthServiceDep
 ) -> JSONResponse:
-    """Create the account and DID; the email must be OTP-verified first."""
-    await service.register(payload)
-    return respond(status.HTTP_201_CREATED, "Holder created successfully!")
+    """Create the account and DID, and sign the holder in.
+
+    The email must be OTP-verified first. ``data`` is the same as the DCS
+    sign-up: ``user_type`` and the session ``token``.
+    """
+    result = await service.register(payload)
+    return respond(status.HTTP_201_CREATED, result.message, result.data)
 
 
 @router.post(
