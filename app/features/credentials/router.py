@@ -170,7 +170,7 @@ async def get_credential_stats(
 @router.get(
     "/holder/credential/notification",
     response_model=AnyResponse,
-    summary="List issue and revoke notifications",
+    summary="List credential and request notifications",
     responses=_AUTH_ERRORS,
 )
 async def list_credential_notifications(
@@ -178,9 +178,16 @@ async def list_credential_notifications(
     service: CredentialServiceDep,
     page: Annotated[int, Query(ge=1)] = 1,
     per_page: Annotated[int, Query(ge=1, le=100)] = 10,
+    include_requests: Annotated[bool, Query()] = False,
 ) -> JSONResponse:
-    """Return notifications newest first; empty is 200 with no items."""
-    result = await service.list_notifications(holder, page, per_page)
+    """Return notifications newest first; empty is 200 with no items.
+
+    ``include_requests=true`` adds credential request notifications
+    (``"type": "request"``); older app versions leave it off.
+    """
+    result = await service.list_notifications(
+        holder, page, per_page, include_requests
+    )
     return respond(
         status.HTTP_200_OK, "Notification received successfully!", result
     )

@@ -37,6 +37,9 @@ from app.features.credentials.schemas import (
     VerificationAnalyticsRequest,
 )
 from app.features.holders.models import Holder
+from app.features.notifications.messages import REQUEST_NOTIFICATION_TYPES
+from app.features.notifications.models import InboxNotification
+from app.features.notifications.repository import NotificationRepository
 
 logger = logging.getLogger(__name__)
 
@@ -110,6 +113,25 @@ def _paginate(
     return rows[start : start + per_page]
 
 
+def _request_item(row: InboxNotification) -> dict[str, Any]:
+    """Return a credential request notification in the list's item shape.
+
+    Connector events carry ids only, so ``title`` and ``message`` are the
+    generic inbox texts; ``request_id`` lets the app open the request.
+    """
+    return {
+        "type": "request",
+        "notification_type": row.notification_type,
+        "title": row.title,
+        "message": row.message,
+        "request_id": (row.extra_metadata or {}).get("request_id"),
+        "credential": "",
+        "credential_image": "",
+        "issuer_name": "",
+        "created_at": to_naive_iso(row.created_at),
+    }
+
+
 def _preview_time(value: str | None) -> str | None:
     parsed = _parse_time(value)
     if parsed is None:
@@ -140,6 +162,7 @@ class CredentialService:
         self.mailer = mailer
         self.refs = CredentialRefRepository(session)
         self.audit = AuditRepository(session)
+        self.notifications = NotificationRepository(session)
 
     async def list_credentials(
         self,
@@ -341,14 +364,24 @@ class CredentialService:
         )
 
     async def list_notifications(
-        self, holder: Holder, page: int, per_page: int
+        self,
+        holder: Holder,
+        page: int,
+        per_page: int,
+        include_requests: bool = False,
     ) -> dict[str, Any]:
-        """Return issue and revoke events built from the credentials.
+        """Return the holder's notifications, newest first.
 
         Like the DCS, every credential gives an "issued" item and a
         revoked one also a "revoked" item. Items carry both the DCS keys
         and the ones the app reads (``credential``, ``issuer_name``,
-        ``created_at``).
+        ``created_at``), plus a ready-to-show ``title`` and ``message``.
+
+        With ``include_requests``, the holder's credential request
+        notifications (request sent, approved, declined, updated) are
+        merged in as ``"type": "request"`` items with their
+        ``request_id``. It is opt-in because older app versions render
+        every item as "issuer has issued you credential".
         """
         lookup = await self.connector.lookup_credentials(holder.email)
         events: list[tuple[datetime, dict[str, Any]]] = []
@@ -356,9 +389,10 @@ class CredentialService:
             credential = item.credential
             if credential is None:
                 continue
+            credential_name = credential.subject_name or credential.title
             common = {
                 "credential_image": credential.image_url,
-                "credential": credential.subject_name or credential.title,
+                "credential": credential_name,
                 "issuer_name": credential.issuer.name,
             }
             issued_at = _issued_at(item) or utc_now()
@@ -368,6 +402,11 @@ class CredentialService:
                     {
                         "type": "issued",
                         **common,
+                        "title": "New Credential Received",
+                        "message": (
+                            f"{credential.issuer.name} has issued you "
+                            f"{credential_name}."
+                        ),
                         "issued_at": to_naive_iso(issued_at),
                         "created_at": to_naive_iso(issued_at),
                     },
@@ -381,18 +420,33 @@ class CredentialService:
                         {
                             "type": "revoked",
                             **common,
+                            "title": "Credential Revoked",
+                            "message": (
+                                f"{credential.issuer.name} revoked your "
+                                f"{credential_name}."
+                            ),
                             "revoked_at": to_naive_iso(revoked_at),
                             "created_at": to_naive_iso(revoked_at),
                         },
                     )
                 )
+        total = len(events)
+        start = (max(page, 1) - 1) * per_page
+        if include_requests:
+            # Only the newest rows up to the end of this page can appear
+            # on it, so the inbox is never read whole.
+            requests = self.notifications
+            rows, request_total = await requests.list_recent_of_types(
+                holder.id, REQUEST_NOTIFICATION_TYPES, start + per_page
+            )
+            events.extend((row.created_at, _request_item(row)) for row in rows)
+            total += request_total
         events.sort(key=lambda event: event[0], reverse=True)
         items = [event for _, event in events]
-        start = (max(page, 1) - 1) * per_page
         return {
             "data": items[start : start + per_page],
             "pages": page,
-            "total": len(items),
+            "total": total,
         }
 
     async def get_public_credential(

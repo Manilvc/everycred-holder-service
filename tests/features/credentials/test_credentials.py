@@ -1,10 +1,14 @@
 import json
+import uuid
+from datetime import UTC, datetime
 from typing import Any
 
 import httpx
 import pytest
 from httpx import AsyncClient
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.features.notifications.models import InboxNotification
 from tests.conftest import (
     FakeConnector,
     RecordingMailer,
@@ -13,6 +17,8 @@ from tests.conftest import (
 )
 
 LIST_URL = "/v1/user/holder/credentials"
+# Newer than every credential event in three_credentials.
+REQUEST_AT = datetime(2026, 12, 1, 9, 0, 0, tzinfo=UTC)
 RAW_DOCUMENT = '{"type": ["VerifiableCredential"], "id": "urn:uuid:u-1"}'
 
 
@@ -527,3 +533,119 @@ async def test_credential_actions_reject_another_holders_id(
             path, params={"cred_id": cred_id}, headers=other.headers
         )
         assert response.status_code == 404, path
+
+
+async def _add_request_notification(
+    session_factory: async_sessionmaker[AsyncSession],
+    holder: RegisteredHolder,
+    request_id: str,
+    created_at: datetime,
+) -> None:
+    async with session_factory() as session:
+        session.add(
+            InboxNotification(
+                id=uuid.uuid4(),
+                holder_id=uuid.UUID(holder.uuid),
+                notification_type="new_credential_request",
+                title="New credential request",
+                message="You have a new credential request.",
+                redirect_module="requests",
+                redirect_path=f"everycredwallet://request/{request_id}",
+                redirect_entity_type="issuer_request",
+                redirect_entity_id=request_id,
+                extra_metadata={
+                    "source_code": "dcs-test",
+                    "request_id": request_id,
+                },
+                is_read=False,
+                created_at=created_at,
+                updated_at=created_at,
+            )
+        )
+        await session.commit()
+
+
+@pytest.mark.usefixtures("three_credentials")
+async def test_request_notifications_are_merged_when_asked(
+    client: AsyncClient,
+    holder: RegisteredHolder,
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    await _add_request_notification(
+        session_factory, holder, "req-1", REQUEST_AT
+    )
+
+    response = await client.get(
+        "/v1/holder/credential/notification",
+        params={"page": 1, "per_page": 10, "include_requests": "true"},
+        headers=holder.headers,
+    )
+
+    data = response.json()["data"]
+    assert data["total"] == 6
+    newest = data["data"][0]
+    assert newest["type"] == "request"
+    assert newest["request_id"] == "req-1"
+    assert newest["title"] == "New credential request"
+    assert newest["message"] == "You have a new credential request."
+    assert newest["created_at"] == "2026-12-01T09:00:00"
+    issued = next(item for item in data["data"] if item["type"] == "issued")
+    assert issued["title"] == "New Credential Received"
+    assert issued["message"] == (
+        f"{issued['issuer_name']} has issued you {issued['credential']}."
+    )
+
+
+@pytest.mark.usefixtures("three_credentials")
+async def test_request_notifications_are_left_out_by_default(
+    client: AsyncClient,
+    holder: RegisteredHolder,
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    # Older app versions print every item as "issuer has issued you ...".
+    await _add_request_notification(
+        session_factory, holder, "req-1", REQUEST_AT
+    )
+
+    response = await client.get(
+        "/v1/holder/credential/notification", headers=holder.headers
+    )
+
+    data = response.json()["data"]
+    assert data["total"] == 5
+    assert all(item["type"] != "request" for item in data["data"])
+
+
+@pytest.mark.usefixtures("three_credentials")
+async def test_request_notifications_page_with_the_credentials(
+    client: AsyncClient,
+    holder: RegisteredHolder,
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    for day in (1, 2, 3):
+        await _add_request_notification(
+            session_factory,
+            holder,
+            f"req-{day}",
+            datetime(2026, 12, day, tzinfo=UTC),
+        )
+
+    pages = [
+        (
+            await client.get(
+                "/v1/holder/credential/notification",
+                params={
+                    "page": page,
+                    "per_page": 3,
+                    "include_requests": "true",
+                },
+                headers=holder.headers,
+            )
+        ).json()["data"]
+        for page in (1, 2, 3)
+    ]
+
+    assert [page["total"] for page in pages] == [8, 8, 8]
+    first_page = [item.get("request_id") for item in pages[0]["data"]]
+    assert first_page == ["req-3", "req-2", "req-1"]
+    assert sum(len(page["data"]) for page in pages) == 8

@@ -85,6 +85,33 @@ class NotificationRepository:
         )
         return rows.all(), total or 0
 
+    async def list_recent_of_types(
+        self,
+        holder_id: uuid.UUID,
+        notification_types: Sequence[str],
+        limit: int,
+    ) -> tuple[Sequence[InboxNotification], int]:
+        """Return the holder's newest notifications of these types.
+
+        Also returns how many of them exist in total.
+        """
+        conditions = [
+            InboxNotification.holder_id == holder_id,
+            InboxNotification.notification_type.in_(notification_types),
+        ]
+        total = await self.session.scalar(
+            select(func.count())
+            .select_from(InboxNotification)
+            .where(*conditions)
+        )
+        rows = await self.session.scalars(
+            select(InboxNotification)
+            .where(*conditions)
+            .order_by(InboxNotification.created_at.desc())
+            .limit(limit)
+        )
+        return rows.all(), total or 0
+
     async def get_for_holder(
         self, holder_id: uuid.UUID, notification_id: uuid.UUID
     ) -> InboxNotification | None:

@@ -20,7 +20,7 @@ credential content.
 | GET | `/v1/holder/credential/download?cred_id=` | `{credential: <document URL>}` | bearer |
 | POST | `/v1/holder/send/email?cred_id=` | Email the verifier link to up to `MAX_SHARE_RECIPIENTS` addresses | bearer |
 | GET | `/v1/holder/stats?cred_id&page&per_page` | Verification statistics | bearer |
-| GET | `/v1/holder/credential/notification?page&per_page` | Issue and revoke notifications | bearer |
+| GET | `/v1/holder/credential/notification?page&per_page&include_requests` | Credential issue / revoke notifications, plus request notifications when asked | bearer |
 | GET | `/v1/user/credential/{credential_unique_id}` | Public lookup (verifier) | none |
 | POST | `/v1/credential/verification/analytics?uuid=` | Record a verification | none |
 
@@ -65,6 +65,31 @@ Errors:
 |--------|-----------|--------|
 | 403 | You can only view your own credentials. | null |
 | 404 | Details not found! | `{"data": [], "pages": <page>, "total": 0}` (empty bucket; the app shows an empty list) |
+
+### `GET /v1/holder/credential/notification`
+
+The wallet's notification list, newest first. `data` is
+`{"data": [...], "pages", "total"}`.
+
+- Every credential gives an `"type": "issued"` item, and a revoked one
+  also a `"type": "revoked"` item, built from the connector lookup. They
+  keep the DCS keys (`credential`, `issuer_name`, `credential_image`,
+  `issued_at` / `revoked_at`, `created_at`) and add a ready-to-show
+  `title` and `message`, e.g. "Example University has issued you
+  Computer Science.".
+- With `include_requests=true`, the holder's credential request
+  notifications are merged in as `"type": "request"` items: `title`,
+  `message`, `notification_type` (`new_credential_request`,
+  `credential_request_approved`, `credential_request_declined`,
+  `credential_request_updated`), `request_id` (opens
+  `everycredwallet://request/<request_id>`) and `created_at`. They come
+  from the inbox rows the connector's `request.created` /
+  `request.updated` events create (see [notifications](notifications.md)).
+  Only the newest `page * per_page` request rows are read, and `total`
+  counts both kinds.
+
+`include_requests` is off by default because older app versions print
+every item as "issuer has issued you credential".
 
 ### Other endpoints
 

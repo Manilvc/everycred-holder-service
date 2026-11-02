@@ -67,6 +67,18 @@ _REQUEST_UPDATED_SPEC = _MessageSpec(
 )
 
 
+# Inbox types the wallet's notification list shows for credential requests
+# (sent, approved, declined, updated).
+REQUEST_NOTIFICATION_TYPES = tuple(
+    spec.notification_type
+    for spec in (
+        _NEW_REQUEST_SPEC,
+        *_REQUEST_STATUS_SPECS.values(),
+        _REQUEST_UPDATED_SPEC,
+    )
+)
+
+
 def _spec_for(payload: ConnectorEventPayload) -> _MessageSpec:
     if payload.event in _CREDENTIAL_SPECS:
         return _CREDENTIAL_SPECS[payload.event]
