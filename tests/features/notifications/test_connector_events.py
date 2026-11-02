@@ -5,6 +5,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core.signatures import DELIVERY_HEADER, SIGNATURE_HEADER
+from app.features.credentials.models import CredentialRef
 from app.features.notifications.models import NotificationDelivery
 from tests.conftest import RegisteredHolder
 from tests.features.notifications.helpers import credential_event, post_event
@@ -22,14 +23,21 @@ async def test_signed_event_creates_inbox_entry_and_deliveries(
         deliveries = (
             await session.scalars(select(NotificationDelivery))
         ).all()
+        ref = await session.scalar(select(CredentialRef))
     assert response.status_code == 202
     assert response.json() == {"status": "accepted"}
     item = inbox.json()["items"][0]
     assert item["notification_type"] == "credential_issued"
-    assert item["redirect_path"] == "everycredwallet://credential/cred-123"
+    # The wallet opens credential/<id> with its credential-list id, which
+    # is the holder's reference for this connector credential.
+    assert (ref.source_code, ref.credential_id) == ("dcs-india", "cred-123")
+    number = str(ref.numeric_id)
+    assert item["redirect_path"] == f"everycredwallet://credential/{number}"
+    assert item["redirect_entity_id"] == number
     assert item["extra_metadata"] == {
         "source_code": "dcs-india",
-        "credential_id": "cred-123",
+        "credential_id": number,
+        "credential_unique_id": "cred-123",
     }
     assert sorted(d.channel for d in deliveries) == ["push", "socket"]
 

@@ -22,6 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import Settings
 from app.core.models import utc_now
 from app.core.signatures import is_signature_valid
+from app.features.credentials.repository import CredentialRefRepository
 from app.features.devices.models import PushToken
 from app.features.devices.repository import PushTokenRepository
 from app.features.holders.repository import HolderRepository
@@ -133,6 +134,7 @@ class ConnectorEventService:
         self.notifications = NotificationRepository(session)
         self.holders = HolderRepository(session)
         self.onboarding = OnboardingService(session, settings)
+        self.credential_refs = CredentialRefRepository(session)
 
     async def receive(
         self,
@@ -222,9 +224,29 @@ class ConnectorEventService:
         self, payload: ConnectorEventPayload, holder_id: uuid.UUID
     ) -> None:
         notification = build_inbox_notification(
-            payload, holder_id, self.settings.notification_redirect_base_url
+            payload,
+            holder_id,
+            self.settings.notification_redirect_base_url,
+            await self._credential_number(payload, holder_id),
         )
         await self.notifications.add_notifications([notification])
+
+    async def _credential_number(
+        self, payload: ConnectorEventPayload, holder_id: uuid.UUID
+    ) -> int | None:
+        """Return the credential's numeric id in the holder's list.
+
+        Creates the reference when the holder has not listed the
+        credential yet, so the id in the notification is the one the
+        list will show.
+        """
+        data = payload.data
+        is_credential_event = payload.event.startswith("credential.")
+        if not is_credential_event or not data.credential_id:
+            return None
+        key = (data.source_code, data.credential_id)
+        refs = await self.credential_refs.ensure(holder_id, [key])
+        return refs[key].numeric_id
 
 
 class NotificationDeliveryService:

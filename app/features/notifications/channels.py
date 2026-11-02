@@ -220,9 +220,9 @@ def create_push_sender(
     settings: Settings, http_client: httpx.AsyncClient
 ) -> PushSender | None:
     """Return an FCM sender, or None when FCM is not configured."""
-    if not (settings.fcm_project_id and settings.fcm_service_account_json):
+    if not settings.fcm_project_id:
         return None
-    info = json.loads(settings.fcm_service_account_json.get_secret_value())
+    info = settings.fcm_service_account_info()
     return FcmPushSender(
         http_client,
         settings.fcm_project_id,

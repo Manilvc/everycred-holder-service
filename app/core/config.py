@@ -5,9 +5,11 @@ call :func:`get_settings` instead of reading ``os.environ`` directly, so
 configuration stays in one place and can be overridden in tests.
 """
 
+import json
 from enum import StrEnum
 from functools import lru_cache
-from typing import Annotated, Literal
+from pathlib import Path
+from typing import Annotated, Any, Literal
 
 from fastapi import Depends
 from pydantic import (
@@ -184,9 +186,14 @@ class Settings(BaseSettings):
     socket_channel: str = "socketio_notifications"
     socket_event: str = "new_request"
     fcm_project_id: str | None = None
+    # The Firebase service account key: either its JSON on one line, or the
+    # path of the key file inside the container (mount it with
+    # docker-compose.fcm.yml). Set one of them, with FCM_PROJECT_ID.
     fcm_service_account_json: SecretStr | None = None
-    # Android notification channel the app creates (the DCS default).
-    fcm_android_channel_id: str = Field(default="default", min_length=1)
+    fcm_service_account_file: Path | None = None
+    # Android notification channel the wallet app creates (its
+    # expo-notifications defaultChannel in app.json).
+    fcm_android_channel_id: str = Field(default="requests", min_length=1)
     notification_redirect_base_url: str = "everycredwallet://"
     notification_max_attempts: int = Field(default=8, ge=1, le=20)
 
@@ -202,6 +209,7 @@ class Settings(BaseSettings):
         "socket_redis_url",
         "fcm_project_id",
         "fcm_service_account_json",
+        "fcm_service_account_file",
         mode="before",
     )
     @classmethod
@@ -262,17 +270,82 @@ class Settings(BaseSettings):
             raise ValueError("PASSWORD_RESET_URL must contain {token}")
         if "{token}" not in self.email_verification_url:
             raise ValueError("EMAIL_VERIFICATION_URL must contain {token}")
-        if bool(self.fcm_project_id) != bool(self.fcm_service_account_json):
-            raise ValueError(
-                "FCM_PROJECT_ID and FCM_SERVICE_ACCOUNT_JSON must be set "
-                "together"
-            )
+        self._check_fcm()
         return self
+
+    def _check_fcm(self) -> None:
+        has_json = self.fcm_service_account_json is not None
+        has_file = self.fcm_service_account_file is not None
+        if has_json and has_file:
+            raise ValueError(
+                "Set FCM_SERVICE_ACCOUNT_JSON or FCM_SERVICE_ACCOUNT_FILE, "
+                "not both"
+            )
+        if bool(self.fcm_project_id) != (has_json or has_file):
+            raise ValueError(
+                "FCM_PROJECT_ID needs FCM_SERVICE_ACCOUNT_JSON or "
+                "FCM_SERVICE_ACCOUNT_FILE, and either needs FCM_PROJECT_ID"
+            )
+        if has_json:
+            # Fail at startup with a clear message rather than crash the
+            # worker on its first round; a file path here is a common slip.
+            _parse_service_account(
+                self.fcm_service_account_json.get_secret_value(),
+                "FCM_SERVICE_ACCOUNT_JSON",
+            )
+
+    def fcm_service_account_info(self) -> dict[str, Any]:
+        """Return the Firebase service account key as a dict.
+
+        Reads FCM_SERVICE_ACCOUNT_FILE when set, else parses
+        FCM_SERVICE_ACCOUNT_JSON.
+
+        Raises:
+            ValueError: No key is configured, the file cannot be read
+                (not mounted into the container?), or it is not a JSON
+                object.
+        """
+        key_file = self.fcm_service_account_file
+        if key_file is not None:
+            try:
+                raw = key_file.read_text(encoding="utf-8")
+            except OSError as exc:
+                raise ValueError(
+                    f"FCM_SERVICE_ACCOUNT_FILE {key_file} cannot be read; "
+                    "mount the key file into the container "
+                    "(docker-compose.fcm.yml)"
+                ) from exc
+            return _parse_service_account(raw, "FCM_SERVICE_ACCOUNT_FILE")
+        if self.fcm_service_account_json is None:
+            raise ValueError("No Firebase service account key is configured")
+        return _parse_service_account(
+            self.fcm_service_account_json.get_secret_value(),
+            "FCM_SERVICE_ACCOUNT_JSON",
+        )
 
     @property
     def is_production(self) -> bool:
         """Return True when running in the production environment."""
         return self.environment is Environment.PRODUCTION
+
+
+def _parse_service_account(raw: str, setting: str) -> dict[str, Any]:
+    """Parse a service account key; the message never contains the key."""
+    try:
+        info = json.loads(raw)
+    except json.JSONDecodeError:
+        info = None
+    if not isinstance(info, dict):
+        hint = (
+            "; for a key file use FCM_SERVICE_ACCOUNT_FILE"
+            if setting == "FCM_SERVICE_ACCOUNT_JSON"
+            else ""
+        )
+        raise ValueError(
+            f"{setting} must be the Firebase service account key JSON "
+            f"(starting with {{){hint}"
+        )
+    return info
 
 
 @lru_cache

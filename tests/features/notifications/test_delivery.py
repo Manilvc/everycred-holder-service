@@ -105,7 +105,9 @@ async def test_worker_delivers_over_socket_and_push(
     # Same data as the DCS push: metadata at the top level, no nesting.
     assert message.data["type"] == "credential_issued"
     assert message.data["category"] == "credential"
-    assert message.data["credential_id"] == "cred-123"
+    # The wallet's credential-list id (numeric), as the DCS push carried.
+    assert message.data["credential_id"].isdigit()
+    assert message.data["credential_unique_id"] == "cred-123"
     assert message.data["source_code"] == "dcs-india"
     assert "extra_metadata" not in message.data
     assert "title" not in message.data

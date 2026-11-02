@@ -85,8 +85,8 @@ Event to notification type (values match the DCS holder registry):
 
 | Event | `data.status` | `notification_type` | Redirect |
 |-------|---------------|---------------------|----------|
-| `credential.issued` | — | `credential_issued` | `credential/<credential_id>` |
-| `credential.revoked` | — | `credential_revoked` | `credential/<credential_id>` |
+| `credential.issued` | — | `credential_issued` | `credential/<list id>` |
+| `credential.revoked` | — | `credential_revoked` | `credential/<list id>` |
 | `request.created` | — | `new_credential_request` | `request/<request_id>` |
 | `request.updated` | `approved` | `credential_request_approved` | `request/<request_id>` |
 | `request.updated` | `declined` | `credential_request_declined` | `request/<request_id>` |
@@ -116,6 +116,17 @@ handling works unchanged (`to_push_data`, `FcmPushSender` in
 A request push therefore carries `data.type = new_credential_request` and
 `data.request_id`, which the app uses to open `request/<request_id>`.
 
+For credential events `credential_id` is the credential's numeric id in the
+holder's credential list (`CredentialRef.numeric_id`, created on the event
+if the holder has not listed the credential yet): the app opens
+`/(app)/credential/<id>` with it, as it did with the DCS numeric id. The
+connector's id is kept as `credential_unique_id`.
+
+A JSON setting that is not a JSON object (for example a file path)
+stops the service at startup with a message naming
+`FCM_SERVICE_ACCOUNT_FILE`; an unreadable key file stops the worker with a
+message to mount it.
+
 Retries: socket publish failures and retryable FCM errors (429, 5xx,
 network) wait 30 s, 2 min, 10 min, 30 min, then hourly, up to
 `NOTIFICATION_MAX_ATTEMPTS`. A channel that is not configured, or a
@@ -138,8 +149,10 @@ holder with no active device, marks the row `skipped`.
 | `SOCKET_REDIS_URL` | unset (socket off) | Redis of the Socket service, with DB index, e.g. `redis://:<password>@redis:6379/2` |
 | `SOCKET_CHANNEL` | `socketio_notifications` | Channel the Socket service subscribes to |
 | `SOCKET_EVENT` | `new_request` | Socket.IO event the wallet listens for |
-| `FCM_PROJECT_ID`, `FCM_SERVICE_ACCOUNT_JSON` | unset (push off) | Firebase project and service account JSON (the same project the app and the DCS used) |
-| `FCM_ANDROID_CHANNEL_ID` | `default` | Android notification channel; same default as the DCS |
+| `FCM_PROJECT_ID` | unset (push off) | Firebase project (the same project the app and the DCS used) |
+| `FCM_SERVICE_ACCOUNT_JSON` | unset | The service account key JSON on one line, starting with `{` |
+| `FCM_SERVICE_ACCOUNT_FILE` | unset | Or: path of the key file **inside the container**, e.g. `/run/secrets/firebase-sa.json` mounted by `docker-compose.fcm.yml` (see that file). Set the JSON or the file, not both |
+| `FCM_ANDROID_CHANNEL_ID` | `requests` | Android notification channel; the wallet app's `defaultChannel` (expo-notifications in app.json) |
 | `NOTIFICATION_REDIRECT_BASE_URL` | `everycredwallet://` | Deep link base |
 | `NOTIFICATION_MAX_ATTEMPTS` | `8` | Attempts per delivery |
 | `WORKER_INTERVAL_SECONDS` | `5` | Worker loop interval |

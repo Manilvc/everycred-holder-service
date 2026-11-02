@@ -134,8 +134,21 @@ def build_inbox_notification(
     payload: ConnectorEventPayload,
     holder_id: uuid.UUID,
     redirect_base_url: str,
+    credential_number: int | None = None,
 ) -> InboxNotification:
-    """Return the inbox row a connector event produces for a holder."""
+    """Return the inbox row a connector event produces for a holder.
+
+    Args:
+        payload: The connector event.
+        holder_id: Holder the notification is for.
+        redirect_base_url: Deep link base, e.g. ``everycredwallet://``.
+        credential_number: For a credential event, the credential's
+            numeric id in the holder's credential list
+            (``CredentialRef.numeric_id``). The wallet opens
+            ``credential/<id>`` with it, as it did with the DCS numeric
+            id, so it is the ``credential_id`` sent; the connector's id
+            is kept as ``credential_unique_id``.
+    """
     data = payload.data
     if payload.event == "holder.invited":
         return build_invite_notification(
@@ -150,7 +163,11 @@ def build_inbox_notification(
             "credential",
             "credential_id",
         )
-        entity_id = data.credential_id
+        entity_id = (
+            str(credential_number)
+            if credential_number is not None
+            else data.credential_id
+        )
     else:
         module, entity_type, path_prefix, metadata_key = (
             REDIRECT_MODULE_REQUESTS,
@@ -163,6 +180,8 @@ def build_inbox_notification(
     metadata: dict[str, Any] = {"source_code": data.source_code}
     if entity_id:
         metadata[metadata_key] = entity_id
+    if is_credential_event and credential_number is not None:
+        metadata["credential_unique_id"] = data.credential_id
     return InboxNotification(
         id=uuid.uuid4(),
         holder_id=holder_id,
