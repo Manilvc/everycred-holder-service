@@ -68,7 +68,14 @@ sequenceDiagram
    source) and reads each source's answer:
    - `holder.registered`: no body;
    - `holder.profile_updated`: body `{"name": <full_name>, "mobile":
-     <mobile or null>}`, read from the holder at send time.
+     <mobile or null>, "did": <did>}`, read from the holder at send time.
+     A DCS stores the DID when it has none (it needs it for linked
+     credentials).
+
+To send the profile (and DID) again to every DCS, for holders who
+registered before the DID was included, run
+`python -m app.features.onboarding.resync_profiles --email <email>`
+(repeatable) or `--all`. The worker delivers the queued reports.
 
 The invite inbox entry:
 

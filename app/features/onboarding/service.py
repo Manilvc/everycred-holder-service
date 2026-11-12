@@ -250,8 +250,16 @@ class RegistrationReportService:
 
 
 def _profile_body(holder: Holder) -> dict[str, Any]:
-    """Return the profile fields a DCS shows on its issuer screens."""
-    return {"name": holder.full_name, "mobile": holder.mobile}
+    """Return the profile fields a DCS keeps for the holder.
+
+    ``did`` lets a DCS that never saw the holder's wallet store their DID,
+    which it needs to issue linked credentials to them.
+    """
+    return {
+        "name": holder.full_name,
+        "mobile": holder.mobile,
+        "did": holder.did,
+    }
 
 
 def _retry_reason(response: OperationResponse) -> str | None:

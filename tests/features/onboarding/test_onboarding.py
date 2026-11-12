@@ -17,6 +17,7 @@ from app.features.onboarding.models import (
     RegistrationReport,
     ReportStatus,
 )
+from app.features.onboarding.resync_profiles import queue_profile_reports
 from app.features.onboarding.service import RegistrationReportService
 from tests.conftest import (
     FakeConnector,
@@ -195,7 +196,7 @@ async def test_report_is_sent_as_the_registered_operation(
     assert report.status == ReportStatus.DONE.value
 
 
-async def test_profile_report_sends_the_current_name_and_contact(
+async def test_profile_report_sends_the_current_name_contact_and_did(
     client: AsyncClient,
     holder: RegisteredHolder,
     connector: FakeConnector,
@@ -217,7 +218,11 @@ async def test_profile_report_sends_the_current_name_and_contact(
     body = sent_bodies(connector)[PROFILE_UPDATED_OPERATION]
     [report] = await list_reports(session_factory, PROFILE_UPDATED_OPERATION)
     assert body["source_code"] is None
-    assert body["body"] == {"name": "Renamed Holder", "mobile": "+9876543210"}
+    assert body["body"] == {
+        "name": "Renamed Holder",
+        "mobile": "+9876543210",
+        "did": holder.did,
+    }
     assert report.status == ReportStatus.DONE.value
 
 
@@ -331,3 +336,38 @@ async def test_unlinked_source_fails_the_report(
     [report] = await list_reports(session_factory)
     assert report.status == ReportStatus.FAILED.value
     assert report.last_error == "Not found."
+
+
+async def test_resync_requeues_the_profile_with_the_did(
+    holder: RegisteredHolder,
+    connector: FakeConnector,
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    connector.handlers[OPERATIONS_PATH] = lambda request: operation_answer(
+        ("dcs-india", 200)
+    )
+    # Deliver what sign-up queued, so only the resync's report is due.
+    await run_reports(session_factory, connector)
+    connector.requests.clear()
+
+    async with session_factory() as session:
+        queued = await queue_profile_reports(
+            session, get_settings(), [holder.email.upper()]
+        )
+    await run_reports(session_factory, connector)
+
+    assert queued == 1
+    body = sent_bodies(connector)[PROFILE_UPDATED_OPERATION]
+    assert body["body"]["did"] == holder.did
+
+
+async def test_resync_ignores_unknown_emails(
+    holder: RegisteredHolder,
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    async with session_factory() as session:
+        queued = await queue_profile_reports(
+            session, get_settings(), ["nobody@example.com"]
+        )
+
+    assert queued == 0
