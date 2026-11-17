@@ -102,6 +102,27 @@ async def preview_credential(
 
 
 @router.get(
+    "/holder/credential/linked",
+    response_model=AnyResponse,
+    summary="List my credentials in the same linked chain",
+    responses=_AUTH_ERRORS,
+)
+async def list_linked_credentials(
+    cred_id: CredentialRefId,
+    holder: CurrentHolder,
+    service: CredentialServiceDep,
+) -> JSONResponse:
+    """Return ``{chain_id, credentials}``; ``data`` is null when not linked."""
+    result = await service.list_linked_credentials(holder, cred_id)
+    message = (
+        "Linked credentials fetched successfully!"
+        if result
+        else "Credential is not linked."
+    )
+    return respond(status.HTTP_200_OK, message, result)
+
+
+@router.get(
     "/holder/credential/download",
     response_model=AnyResponse,
     summary="Get the download link of a credential",

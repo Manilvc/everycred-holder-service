@@ -18,6 +18,7 @@ credential content.
 | GET | `/v1/holder/credential/share?cred_id=` | Share payload | bearer |
 | GET | `/v1/holder/credential/preview?cred_id=` | Fields, validity and revocation (DCS preview shape; every `ftype` is `text`) | bearer |
 | GET | `/v1/holder/credential/download?cred_id=` | `{credential: <document URL>}` | bearer |
+| GET | `/v1/holder/credential/linked?cred_id=` | My credentials in the same linked chain, with names and status | bearer |
 | POST | `/v1/holder/send/email?cred_id=` | Email the verifier link to up to `MAX_SHARE_RECIPIENTS` addresses | bearer |
 | GET | `/v1/holder/stats?cred_id&page&per_page` | Verification statistics | bearer |
 | GET | `/v1/holder/credential/notification?page&per_page&include_requests` | Credential issue / revoke notifications, plus request notifications when asked | bearer |
@@ -90,6 +91,59 @@ The wallet's notification list, newest first. `data` is
 
 `include_requests` is off by default because older app versions print
 every item as "issuer has issued you credential".
+
+### `GET /v1/holder/credential/linked`
+
+The wallet's credential page shows a linked credential's chain. The
+public linked list it reads carries no credential names and nothing
+about the holder's own copies, so this route returns the caller's own
+credentials of the same chain.
+
+```json
+{
+  "status": "success",
+  "message": "Linked credentials fetched successfully!",
+  "data": {
+    "chain_id": "00000000-0000-0000-0000-000000000001",
+    "credentials": [
+      {
+        "id": 4815162342,
+        "credential_id": "00000000-0000-0000-0000-000000000001",
+        "previous_credential_ids": [],
+        "subject_name": "Employment Verification",
+        "issuer_name": "Example Employer",
+        "issued_at": "2026-11-05T10:00:00",
+        "revoked": false,
+        "revoked_at": null,
+        "valid_until": null,
+        "is_current": false
+      }
+    ]
+  }
+}
+```
+
+- The chain id is the single key of the credential document's signed
+  `linkedCredentialData.firstCredentialLinkedList`, without `urn:uuid:`
+  and lower-cased (`app/features/credentials/linked.py`). An SD-JWT
+  credential is read from its JWT payload.
+- `credential_id` is the document's own `id` (else `jti`), normalised the
+  same way: the id the public linked list uses, so the wallet can match
+  each row to a list entry. `id` is the holder's integer reference.
+- `previous_credential_ids` are the credentials this one directly
+  follows, read from the signed block's `previousCredentialsId` and
+  `previousOwnershipCredentialId` maps (normalised, duplicates dropped).
+  The wallet uses them to show each credential's "Next" credentials,
+  including ones not saved on the device. The links are signed before
+  anchoring, so they are present even when the issuer's chain record
+  failed.
+- Only credentials the connector routes to the caller are listed, oldest
+  first. Another holder's credentials in the chain (after an ownership
+  transfer) are never returned.
+- `revoked` / `revoked_at` follow the connector status, as in the list.
+- A standalone credential answers 200 with `data: null` and "Credential
+  is not linked.". An id that is not the caller's answers 404 "Details
+  not found!".
 
 ### Other endpoints
 
@@ -167,3 +221,5 @@ returns the same `id` for a credential.
 ## Testing
 
 - `tests/features/credentials/test_credentials.py` (fake connector)
+- `tests/features/credentials/test_linked_credentials.py`: the linked
+  route, chain grouping, SD-JWT payloads and damaged blocks

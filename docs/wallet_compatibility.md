@@ -72,10 +72,13 @@ Every response is `{"status", "data", "message"}`, built by
 | 26 | GET | `/v1/holder/subject/requests` (and deprecated `/v1/subject/requests`) | bearer | 200 | `features/gateway` |
 | 27 | GET | `/v1/holder/request/{request_id}` (and deprecated `/v1/request/{request_id}`) | bearer | 200 | `features/gateway` |
 | 28 | POST | `/v1/holder/request/submission` (and deprecated `/v1/request/submission`) | bearer | 200 | `features/gateway` |
+| — | GET | `/v1/holder/credential/linked?cred_id=` | bearer | 200 | `features/credentials` |
 | — | POST | `/v1/holder/reset/{token}/submit` (form) | reset link | 200 | `features/auth` |
 | — | PUT / DELETE | `/v1/push/holder/token` | bearer | 200 | `features/devices` |
 
-The last two are not called by the app today but keep the DCS paths:
+`/v1/holder/credential/linked` is new here (the DCS has no holder
+equivalent); it backs the wallet's linked credentials timeline and is
+described in `docs/features/credentials.md`. The last two are not called by the app today but keep the DCS paths:
 the first serves the web password reset page, the second is for push
 notifications once the app adds them.
 

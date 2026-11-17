@@ -30,6 +30,12 @@ from app.core.exceptions import (
 from app.core.models import to_naive_iso, utc_now
 from app.features.audit.models import AuditAction
 from app.features.audit.repository import AuditRepository
+from app.features.credentials.linked import (
+    chain_id_of,
+    document_id_of,
+    document_of,
+    previous_ids_of,
+)
 from app.features.credentials.models import CredentialRef
 from app.features.credentials.repository import CredentialRefRepository
 from app.features.credentials.schemas import (
@@ -329,6 +335,64 @@ class CredentialService:
             len(recipients),
         )
 
+    async def list_linked_credentials(
+        self, holder: Holder, numeric_id: int
+    ) -> dict[str, Any] | None:
+        """Return the holder's own credentials in the same chain, oldest first.
+
+        Only credentials the connector routes to this holder are read, so
+        another holder's place in the chain is never revealed here; the
+        wallet shows those entries from the public linked list instead.
+
+        Returns:
+            ``{"chain_id", "credentials"}``, or None when the credential
+            is not linked.
+
+        Raises:
+            NotFoundError: The id is not one of the holder's credentials.
+        """
+        ref = await self.refs.get(holder.id, numeric_id)
+        if ref is None:
+            raise NotFoundError(DETAILS_NOT_FOUND)
+        lookup = await self.connector.lookup_credentials(holder.email)
+        current = next(
+            (
+                item
+                for item in lookup.items
+                if (item.source_code, item.credential_id)
+                == (ref.source_code, ref.credential_id)
+                and item.credential is not None
+            ),
+            None,
+        )
+        if current is None:
+            raise NotFoundError(DETAILS_NOT_FOUND)
+        chain_id = chain_id_of(document_of(current.credential))
+        if chain_id is None:
+            return None
+
+        members: list[tuple[CredentialLookupItem, dict[str, Any] | None]] = []
+        for item in lookup.items:
+            if item.credential is None:
+                continue
+            document = document_of(item.credential)
+            if chain_id_of(document) == chain_id:
+                members.append((item, document))
+        members.sort(key=lambda pair: _newest_first(pair[0]))
+        refs = await self._references(holder, [item for item, _ in members])
+        return {
+            "chain_id": chain_id,
+            "credentials": [
+                self._linked_row(
+                    item,
+                    document,
+                    refs[(item.source_code, item.credential_id)],
+                    is_current=item is current,
+                )
+                for item, document in members
+            ],
+        }
+
     async def get_stats(
         self, holder: Holder, numeric_id: int
     ) -> tuple[int, str, Any]:
@@ -586,6 +650,33 @@ class CredentialService:
         if credential.credential_json is not None:
             return json.dumps(credential.credential_json)
         return None
+
+    @staticmethod
+    def _linked_row(
+        item: CredentialLookupItem,
+        document: dict[str, Any] | None,
+        ref: CredentialRef,
+        *,
+        is_current: bool,
+    ) -> dict[str, Any]:
+        credential = item.credential
+        revoked = _is_revoked(item)
+        return {
+            "id": ref.numeric_id,
+            # The id the chain's public linked list refers to.
+            "credential_id": document_id_of(document),
+            # Lets the wallet find the credentials that follow this one.
+            "previous_credential_ids": previous_ids_of(document),
+            "subject_name": credential.subject_name or credential.title,
+            "issuer_name": credential.issuer.name,
+            "issued_at": to_naive_iso(_issued_at(item)),
+            "revoked": revoked,
+            "revoked_at": (
+                to_naive_iso(item.status_changed_at) if revoked else None
+            ),
+            "valid_until": credential.valid_until,
+            "is_current": is_current,
+        }
 
     @staticmethod
     def _row(
